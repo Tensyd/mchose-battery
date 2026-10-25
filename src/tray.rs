@@ -126,13 +126,14 @@ impl Drop for Tray {
 }
 
 fn base_data(hwnd: HWND, icon: HICON) -> NOTIFYICONDATAW {
-    let mut data = NOTIFYICONDATAW::default();
-    data.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-    data.hWnd = hwnd;
-    data.uID = TRAY_ID;
-    data.uCallbackMessage = WM_APP_TRAY;
-    data.hIcon = icon;
-    data
+    NOTIFYICONDATAW {
+        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: hwnd,
+        uID: TRAY_ID,
+        uCallbackMessage: WM_APP_TRAY,
+        hIcon: icon,
+        ..Default::default()
+    }
 }
 
 fn copy_tip(data: &mut NOTIFYICONDATAW, text: &str) {
@@ -209,7 +210,7 @@ pub fn create_app_icon() -> HICON {
             APP_ICON.len(),
         );
 
-        let stride = ((APP_ICON_SIZE as usize + 15) / 16) * 2;
+        let stride = (APP_ICON_SIZE as usize).div_ceil(16) * 2;
         let mut mask_bits = vec![0_u8; stride * APP_ICON_SIZE as usize];
         for y in 0..APP_ICON_SIZE as usize {
             for x in 0..APP_ICON_SIZE as usize {
@@ -254,11 +255,7 @@ mod tests {
             DeviceKind::Keyboard => "G87 V2",
             DeviceKind::Headset => "V9 PRO",
         };
-        DeviceReading {
-            kind,
-            model,
-            reading,
-        }
+        DeviceReading::from_parts(kind, model, reading)
     }
 
     fn snapshot() -> Snapshot {

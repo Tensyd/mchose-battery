@@ -16,6 +16,8 @@
 | G87 V2 键盘 | 2.4G 接收器 | `3837:201B` |
 | V9 PRO 耳机 | 2.4G 接收器 | `291D:385D` |
 
+只支持上表三款。其他型号即使同品牌、同系列、甚至标识相近，也不代表能读——识别用的是接口四元组，而电量查询报文各型号不同。候选型号与证据等级见 [docs/compatibility.md](docs/compatibility.md)。
+
 ## 功能
 
 - 三设备电量卡片，图标 / 型号 / 百分比 / 电量条。
@@ -35,6 +37,15 @@
 
 Windows 10 / 11 x64，双击 exe 即可，无需安装运行时。
 
+## 资源占用
+
+以「普通 Rust 空进程（0.7 MB 专用内存）」为参照，本程序专用内存约 **2.0 MB**，其中大部分是 exe 映像与 Windows 图形栈的私有页。
+
+- 静置 CPU 占用 0：无定时轮询，只有聚焦或点击时才读取一次设备。
+- 读取用一次性线程，栈按 96 KB 申请，避免默认 2 MB 栈带来的内存尖峰。
+- 绘制用的字体与后备位图随窗口长期复用，不随重绘反复创建。
+- 不做后台轮询，因此不产生常驻的定时器与唤醒。
+
 ## 构建
 
 ```bash
@@ -43,17 +54,29 @@ cargo build --release
 
 需要 Rust stable 与 Windows 链接环境。产物为 `target/release/mchose-battery.exe`，仅依赖系统 DLL。
 
+图标由 `build.rs` 直接写成 exe 内的资源段，不需要额外的资源编译器；若 `assets/app.ico` 缺失，程序仍可构建，只是图标退回系统默认样式。
+
 ## 项目结构
 
 ```
 src/
   main.rs      程序入口
-  device.rs    HID 枚举与三款设备协议解析
+  device/      设备层
+    mod.rs         快照、读数状态与缓存继承
+    spec.rs        支持设备表（识别标识、协议、显示策略）
+    protocol.rs    三款设备的查询报文与解析
+    transport.rs   HID 传输接口（系统实现与测试替身）
+    match_rules.rs 接口匹配规则
   ui.rs        窗口、绘制与交互
   tray.rs      系统托盘与悬停摘要
   autostart.rs 开机自启注册表读写
   logo.bgra    官网表头字标位图
   app-icon.bgra 程序图标位图
+assets/
+  app.ico      可执行文件图标（资源管理器、任务栏、任务管理器）
+docs/
+  compatibility.md 支持状态、证据等级与候选型号
+build.rs       把 app.ico 写成 exe 内的资源段
 ```
 
 ## 说明

@@ -8,7 +8,7 @@ use windows_sys::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, BitBlt, CLEARTYPE_QUALITY,
     CLIP_DEFAULT_PRECIS, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen,
     CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_PITCH, DIB_RGB_COLORS, DeleteDC, DeleteObject,
-    DrawTextW, EndPaint, FF_DONTCARE, FW_BOLD, FW_NORMAL, FillRect, HALFTONE, HDC, HFONT,
+    DrawTextW, EndPaint, FF_DONTCARE, FW_BOLD, FW_NORMAL, FillRect, HALFTONE, HBITMAP, HDC, HFONT,
     InvalidateRect, LineTo, MoveToEx, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, RoundRect, SRCCOPY,
     ScreenToClient, SelectObject, SetBkMode, SetStretchBltMode, SetTextColor, StretchDIBits,
     TRANSPARENT, Arc as GdiArc,
@@ -30,7 +30,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::autostart;
-use crate::device::{DeviceKind, Reading, Snapshot, carry_last_known, read_snapshot};
+use crate::device::{DeviceKind, Reading, Snapshot, carry_forward, read_snapshot};
 use crate::tray::{MENU_EXIT, MENU_SHOW_WINDOW, Tray, WM_APP_TRAY, create_app_icon};
 
 const APP_TITLE: &str = "MCHOSE 电量";
@@ -41,8 +41,8 @@ const WA_INACTIVE: usize = 0;
 
 /// Header wordmark from mchose.com.cn, pre-composited on the window background.
 const LOGO: &[u8] = include_bytes!("logo.bgra");
-const LOGO_WIDTH: i32 = 437;
-const LOGO_HEIGHT: i32 = 66;
+const LOGO_WIDTH: i32 = 219;
+const LOGO_HEIGHT: i32 = 33;
 
 /// Set while a one-shot read is in flight, so focus + click cannot stack reads.
 static REFRESHING: AtomicBool = AtomicBool::new(false);
@@ -73,6 +73,59 @@ struct WindowContext {
     hwnd: HWND,
     tray: Option<Tray>,
     autostart: bool,
+    surface: Surface,
+}
+
+/// Reusable paint resources. Recreating the fonts and the back buffer for every repaint
+/// churns GDI objects for no reason, so they live as long as the window does.
+struct Surface {
+    width: i32,
+    height: i32,
+    dc: HDC,
+    bitmap: HBITMAP,
+    old_bitmap: HBITMAP,
+    card_title: HFONT,
+    percent: HFONT,
+    switch: HFONT,
+    font_scale: f32,
+}
+
+impl Surface {
+    fn empty() -> Self {
+        Self {
+            width: 0,
+            height: 0,
+            dc: std::ptr::null_mut(),
+            bitmap: std::ptr::null_mut(),
+            old_bitmap: std::ptr::null_mut(),
+            card_title: std::ptr::null_mut(),
+            percent: std::ptr::null_mut(),
+            switch: std::ptr::null_mut(),
+            font_scale: 0.0,
+        }
+    }
+}
+
+impl Drop for Surface {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.card_title.is_null() {
+                DeleteObject(self.card_title);
+            }
+            if !self.percent.is_null() {
+                DeleteObject(self.percent);
+            }
+            if !self.switch.is_null() {
+                DeleteObject(self.switch);
+            }
+            if !self.bitmap.is_null() {
+                DeleteObject(self.bitmap);
+            }
+            if !self.dc.is_null() {
+                DeleteDC(self.dc);
+            }
+        }
+    }
 }
 
 pub fn run() {
@@ -126,6 +179,7 @@ pub fn run() {
             hwnd: std::ptr::null_mut(),
             tray: None,
             autostart: autostart::is_enabled(),
+            surface: Surface::empty(),
         });
         let context_ptr = Box::into_raw(context);
 
@@ -186,22 +240,27 @@ fn request_refresh(hwnd: HWND) {
     };
 
     let hwnd_value = hwnd as usize;
-    std::thread::spawn(move || {
-        let mut next = read_snapshot();
-        if let Ok(mut state) = snapshot.lock() {
-            carry_last_known(&mut next.mouse.reading, &state.mouse.reading);
-            carry_last_known(&mut next.keyboard.reading, &state.keyboard.reading);
-            *state = next;
-        }
-        REFRESHING.store(false, Ordering::Release);
-
-        let hwnd = hwnd_value as HWND;
-        unsafe {
-            if IsWindow(hwnd) != 0 {
-                PostMessageW(hwnd, WM_APP_REFRESH, 0, 0);
+    // A small stack keeps the one-shot reader from committing the default two megabytes.
+    let spawn = std::thread::Builder::new()
+        .stack_size(96 * 1024)
+        .spawn(move || {
+            let mut next = read_snapshot();
+            if let Ok(mut state) = snapshot.lock() {
+                carry_forward(&mut next, &state);
+                *state = next;
             }
-        }
-    });
+            REFRESHING.store(false, Ordering::Release);
+
+            let hwnd = hwnd_value as HWND;
+            unsafe {
+                if IsWindow(hwnd) != 0 {
+                    PostMessageW(hwnd, WM_APP_REFRESH, 0, 0);
+                }
+            }
+        });
+    if spawn.is_err() {
+        REFRESHING.store(false, Ordering::Release);
+    }
 }
 
 unsafe extern "system" fn window_proc(
@@ -369,10 +428,6 @@ unsafe fn paint(hwnd: HWND) {
     let width = client.right.max(1);
     let height = client.bottom.max(1);
 
-    let memory_dc = unsafe { CreateCompatibleDC(window_dc) };
-    let bitmap = unsafe { CreateCompatibleBitmap(window_dc, width, height) };
-    let old_bitmap = unsafe { SelectObject(memory_dc, bitmap) };
-
     let scale = window_scale(hwnd);
     let (snapshot, autostart_enabled) = match unsafe { context(hwnd) } {
         Some(context) => (
@@ -387,15 +442,74 @@ unsafe fn paint(hwnd: HWND) {
     };
 
     unsafe {
-        render(memory_dc, width, height, scale, &snapshot, autostart_enabled);
-        BitBlt(window_dc, 0, 0, width, height, memory_dc, 0, 0, SRCCOPY);
-        SelectObject(memory_dc, old_bitmap);
-        DeleteObject(bitmap);
-        DeleteDC(memory_dc);
+        if let Some(context) = context_mut(hwnd) {
+            prepare_surface(&mut context.surface, window_dc, width, height, scale);
+            render(
+                context.surface.dc,
+                width,
+                height,
+                scale,
+                &snapshot,
+                autostart_enabled,
+                context.surface.card_title,
+                context.surface.percent,
+                context.surface.switch,
+            );
+            BitBlt(
+                window_dc,
+                0,
+                0,
+                width,
+                height,
+                context.surface.dc,
+                0,
+                0,
+                SRCCOPY,
+            );
+        }
         EndPaint(hwnd, &paint_struct);
     }
 }
 
+/// Keeps the back buffer and the fonts alive between repaints, rebuilding them only when
+/// the window size or the scale actually changes.
+unsafe fn prepare_surface(surface: &mut Surface, window_dc: HDC, width: i32, height: i32, scale: f32) {
+    unsafe {
+        if surface.width != width || surface.height != height {
+            if !surface.bitmap.is_null() {
+                SelectObject(surface.dc, surface.old_bitmap);
+                DeleteObject(surface.bitmap);
+            }
+            if !surface.dc.is_null() {
+                DeleteDC(surface.dc);
+            }
+            surface.dc = CreateCompatibleDC(window_dc);
+            surface.bitmap = CreateCompatibleBitmap(window_dc, width, height);
+            surface.old_bitmap = SelectObject(surface.dc, surface.bitmap);
+            surface.width = width;
+            surface.height = height;
+            surface.font_scale = 0.0;
+        }
+
+        if surface.font_scale != scale {
+            for font in [
+                &mut surface.card_title,
+                &mut surface.percent,
+                &mut surface.switch,
+            ] {
+                if !font.is_null() {
+                    DeleteObject(*font);
+                }
+            }
+            surface.card_title = make_font(s(16.0, scale), FW_BOLD as i32);
+            surface.percent = make_font(s(29.0, scale), FW_BOLD as i32);
+            surface.switch = make_font(s(12.0, scale), FW_NORMAL as i32);
+            surface.font_scale = scale;
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 unsafe fn render(
     hdc: HDC,
     width: i32,
@@ -403,13 +517,12 @@ unsafe fn render(
     scale: f32,
     snapshot: &Snapshot,
     autostart_enabled: bool,
+    card_title_font: HFONT,
+    percent_font: HFONT,
+    switch_font: HFONT,
 ) {
     unsafe {
         fill_rect(hdc, 0, 0, width, height, BG);
-
-        let card_title_font = make_font(s(16.0, scale), FW_BOLD as i32);
-        let percent_font = make_font(s(29.0, scale), FW_BOLD as i32);
-        let switch_font = make_font(s(12.0, scale), FW_NORMAL as i32);
 
         draw_logo(hdc, s(20.0, scale), s(15.0, scale), s(18.0, scale));
         draw_autostart(hdc, scale, autostart_enabled, switch_font);
@@ -430,10 +543,6 @@ unsafe fn render(
                 percent_font,
             );
         }
-
-        DeleteObject(card_title_font);
-        DeleteObject(percent_font);
-        DeleteObject(switch_font);
     }
     let _ = height;
 }
@@ -1039,6 +1148,7 @@ unsafe fn fill_rect(hdc: HDC, left: i32, top: i32, right: i32, bottom: i32, colo
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 unsafe fn draw_rounded_rect(
     hdc: HDC,
     left: i32,
