@@ -4,6 +4,10 @@
 
 ![界面预览](preview.png)
 
+## 下载
+
+不自行编译的话，直接到 [Releases](https://github.com/Tensyd/mchose-battery/releases) 下载 `MCHOSE-Battery.exe`，双击运行即可。
+
 ## 支持的设备
 
 | 设备 | 连接方式 | 识别标识 |
