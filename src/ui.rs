@@ -18,6 +18,7 @@ use windows_sys::Win32::UI::HiDpi::{
     AdjustWindowRectExForDpi, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForWindow,
     SetProcessDpiAwarenessContext,
 };
+use windows_sys::Win32::UI::Input::Ime::ImmAssociateContextEx;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DestroyWindow,
     DefWindowProcW, DispatchMessageW, GWLP_USERDATA, GetClientRect, GetCursorPos, GetMessageW,
@@ -207,6 +208,11 @@ pub fn run(start_hidden: bool) {
         }
 
         (*context_ptr).hwnd = hwnd;
+        // The window has no text input, so detach the input method editor. Without this
+        // the active IME (e.g. WeType) injects its DLLs and a DirectWrite stack into the
+        // process as soon as the window takes focus, which costs several megabytes for a
+        // feature this program will never use.
+        ImmAssociateContextEx(hwnd, std::ptr::null_mut(), 0);
         SendMessageW(hwnd, WM_SETICON, ICON_BIG as usize, app_icon as isize);
         SendMessageW(hwnd, WM_SETICON, ICON_SMALL as usize, app_icon as isize);
         resize_for_dpi(hwnd);
