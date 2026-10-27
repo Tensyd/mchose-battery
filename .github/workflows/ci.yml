@@ -22,11 +22,19 @@ jobs:
           targets: x86_64-pc-windows-gnu
           components: clippy
 
-      - name: Put mingw binutils on PATH
+      - name: Install mingw binutils
         shell: pwsh
         run: |
+          # dlltool is not part of rustup, and the runner image does not ship the
+          # mingw-w64 toolchain either — pull it from the MSYS2 that is preinstalled.
+          $pacman = 'C:\msys64\usr\bin\pacman.exe'
+          if (-not (Test-Path $pacman)) {
+            throw 'MSYS2 pacman not found; cannot provide dlltool for the GNU target'
+          }
+          & $pacman -Sy --noconfirm --needed mingw-w64-x86_64-binutils
+          if ($LASTEXITCODE -ne 0) { throw "pacman failed with $LASTEXITCODE" }
           if (-not (Test-Path 'C:\msys64\mingw64\bin\dlltool.exe')) {
-            throw 'dlltool not found; the runner image changed'
+            throw 'dlltool still missing after install'
           }
           'C:\msys64\mingw64\bin' | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
