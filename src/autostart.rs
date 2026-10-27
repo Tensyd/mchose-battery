@@ -10,13 +10,11 @@ use windows_sys::Win32::System::Registry::{
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const VALUE_NAME: &str = "MCHOSE Battery";
 const MAX_VALUE_BYTES: u32 = 4096;
+/// Boot is not a user request to see the window: start in the tray instead.
+const SILENT_FLAG: &str = "--silent";
 
-/// True when the Run entry exists and still points at this executable.
-pub fn is_enabled() -> bool {
-    let Some(expected) = command_line() else {
-        return false;
-    };
-
+/// Reads the Run entry, if any.
+fn stored_command() -> Option<String> {
     unsafe {
         let mut key: HKEY = std::ptr::null_mut();
         if RegOpenKeyExW(
@@ -27,7 +25,7 @@ pub fn is_enabled() -> bool {
             &mut key,
         ) != ERROR_SUCCESS
         {
-            return false;
+            return None;
         }
 
         let name = wide(VALUE_NAME);
@@ -42,7 +40,7 @@ pub fn is_enabled() -> bool {
             &mut size,
         );
 
-        let enabled = if status == ERROR_SUCCESS
+        let stored = if status == ERROR_SUCCESS
             && kind == REG_SZ
             && size > 0
             && size <= MAX_VALUE_BYTES
@@ -56,14 +54,47 @@ pub fn is_enabled() -> bool {
                 buffer.as_mut_ptr(),
                 &mut size,
             );
-            status == ERROR_SUCCESS && decode(&buffer[..size as usize]).eq_ignore_ascii_case(&expected)
+            if status == ERROR_SUCCESS {
+                Some(decode(&buffer[..size as usize]))
+            } else {
+                None
+            }
         } else {
-            false
+            None
         };
 
         RegCloseKey(key);
-        enabled
+        stored
     }
+}
+
+/// True when the Run entry exists and still points at this executable.
+///
+/// Only the executable path is compared: a value written by an older build has no
+/// `--silent` flag, and that must not read as "autostart is off".
+pub fn is_enabled() -> bool {
+    let Ok(current) = std::env::current_exe() else {
+        return false;
+    };
+    let Some(stored) = stored_command() else {
+        return false;
+    };
+
+    executable_of(&stored).eq_ignore_ascii_case(&current.display().to_string())
+}
+
+/// Rewrites an entry left by an older build so the next boot starts silently.
+pub fn migrate_to_silent_start() {
+    if !is_enabled() {
+        return;
+    }
+    let Some(expected) = command_line() else {
+        return;
+    };
+    if stored_command().as_deref() == Some(expected.as_str()) {
+        return;
+    }
+    let _ = set_enabled(true);
 }
 
 /// Writes or removes the per-user Run entry. No elevation required.
@@ -101,7 +132,19 @@ pub fn set_enabled(enabled: bool) -> bool {
 
 fn command_line() -> Option<String> {
     let path = std::env::current_exe().ok()?;
-    Some(format!("\"{}\"", path.display()))
+    Some(format!("\"{}\" {}", path.display(), SILENT_FLAG))
+}
+
+/// Pulls the executable out of a Run value. Handles both `"path" --args` and a bare path.
+fn executable_of(command: &str) -> String {
+    let trimmed = command.trim();
+    if let Some(rest) = trimmed.strip_prefix('"') {
+        return match rest.find('"') {
+            Some(end) => rest[..end].to_string(),
+            None => rest.to_string(),
+        };
+    }
+    trimmed.split_whitespace().next().unwrap_or("").to_string()
 }
 
 fn decode(bytes: &[u8]) -> String {
@@ -135,6 +178,21 @@ mod tests {
     #[test]
     fn command_line_is_quoted() {
         let command = command_line().expect("current exe");
-        assert!(command.starts_with('"') && command.ends_with('"'));
+        assert!(command.starts_with('"') && command.contains('"'));
+    }
+
+    #[test]
+    fn command_line_asks_for_a_silent_start() {
+        let command = command_line().expect("current exe");
+        assert!(command.ends_with(" --silent"), "boot must not pop the window up");
+    }
+
+    #[test]
+    fn executable_of_strips_arguments_and_quotes() {
+        assert_eq!(executable_of(r#""C:\a b\app.exe" --silent"#), r"C:\a b\app.exe");
+        assert_eq!(executable_of(r#""C:\a\app.exe""#), r"C:\a\app.exe");
+        assert_eq!(executable_of(r"C:\a\app.exe"), r"C:\a\app.exe");
+        assert_eq!(executable_of(r"C:\a\app.exe --silent"), r"C:\a\app.exe");
+        assert_eq!(executable_of("  "), "");
     }
 }

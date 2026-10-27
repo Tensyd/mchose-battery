@@ -128,10 +128,14 @@ impl Drop for Surface {
     }
 }
 
-pub fn run() {
+pub fn run(start_hidden: bool) {
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
+
+    // An entry written by an older build has no `--silent` flag; rewrite it so the next
+    // boot starts in the tray like the current setting promises.
+    autostart::migrate_to_silent_start();
 
     let snapshot = Arc::new(Mutex::new(Snapshot::loading()));
     let class_name = wide("MchoseBatteryWindow");
@@ -187,7 +191,7 @@ pub fn run() {
             0,
             class_name.as_ptr(),
             title.as_ptr(),
-            style | WS_VISIBLE,
+            if start_hidden { style } else { style | WS_VISIBLE },
             x,
             y,
             window_width,
@@ -206,7 +210,9 @@ pub fn run() {
         SendMessageW(hwnd, WM_SETICON, ICON_BIG as usize, app_icon as isize);
         SendMessageW(hwnd, WM_SETICON, ICON_SMALL as usize, app_icon as isize);
         resize_for_dpi(hwnd);
-        ShowWindow(hwnd, SW_SHOW);
+        if !start_hidden {
+            ShowWindow(hwnd, SW_SHOW);
+        }
         let loading = snapshot.lock().map(|state| state.clone()).unwrap_or_else(|_| Snapshot::loading());
         (*context_ptr).tray = Tray::new(hwnd, &loading);
         InvalidateRect(hwnd, std::ptr::null(), 1);
