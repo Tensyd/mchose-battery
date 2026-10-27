@@ -59,6 +59,18 @@
 
 > 📌 **说明**：当前版本严格针对上述三款原装接收器接口适配，所有电量查询均为经过验证的只读 HID 报文，不发送任何未知写指令，确保安全稳定。候选型号支持计划与证据等级详见 [docs/compatibility.md](docs/compatibility.md)。
 
+### 有新设备想反馈？
+
+程序带一个只读的接口诊断模式，**不打开设备、不发任何指令**，只列出系统看到的 HID 接口：
+
+```powershell
+MCHOSE-Battery.exe --diagnose
+```
+
+报告生成在 exe 同目录的 `mchose-diagnose.txt`（目录不可写时改存临时目录），其中包含厂商自定义接口清单、已知厂商 ID 的其他接口，以及三款已支持型号是否被识别。报告不读取序列号与设备路径，可以放心贴到 issue 里。
+
+附上报告、型号固件版本、以及同一时刻官方软件显示的电量，就能把新型号推进到「可离线适配」这一步。
+
 ---
 
 ## 数据与状态约定
@@ -91,13 +103,14 @@ cargo build --release
 
 ```text
 src/
-  main.rs          程序入口
+  main.rs          程序入口（--diagnose 走诊断分支）
   device/          设备协议与驱动层
     mod.rs           快照、读数状态与按实例缓存隔离
     spec.rs          支持设备表（识别四元组、协议绑定、显示策略）
     protocol.rs      三款设备的只读查询报文与响应解析
     transport.rs     HID 传输抽象（系统 Link 与离线测试 MockLink）
     match_rules.rs   接口四元组匹配规则
+  diagnose.rs      被动枚举诊断：只列接口，不打开设备、不发指令
   ui.rs            极简卡片界面、SDF解析抗锯齿绘制与按需刷新调度
   tray.rs          系统托盘管理与悬停电量摘要
   autostart.rs     开机自启注册表读写实现

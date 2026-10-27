@@ -3,6 +3,7 @@ mod protocol;
 mod spec;
 mod transport;
 
+pub use match_rules::InterfaceFacts;
 pub use protocol::ReadErrorKind;
 pub use spec::{DeviceSpec, RetainPolicy, Slot, SPECS};
 pub use transport::{Clock, SystemClock, SystemLink};
