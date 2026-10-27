@@ -9,6 +9,17 @@ pub use spec::{DeviceSpec, RetainPolicy, SPECS};
 pub use transport::{Clock, SystemClock, SystemLink};
 
 use hidapi::{DeviceInfo, HidApi};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
+
+/// Upper bound for one refresh. A wedged HID call cannot be cancelled, so this is what
+/// keeps the window usable instead of leaving it on "reading" until the process restarts.
+const READ_DEADLINE: Duration = Duration::from_secs(8);
+
+/// A stuck read thread never exits, so cap how many may pile up across retries.
+const MAX_OUTSTANDING_READS: usize = 4;
+static OUTSTANDING_READS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeviceKind {
@@ -102,40 +113,57 @@ impl Snapshot {
 }
 
 pub fn read_snapshot() -> Snapshot {
-    read_all(&SystemClock)
+    read_all()
 }
 
-fn read_all(clock: &dyn Clock) -> Snapshot {
+fn read_all() -> Snapshot {
     let mut results: Vec<Option<DeviceReading>> = SPECS.iter().map(|_| None).collect();
+    let (sender, receiver) = mpsc::channel();
 
     // Queries are independent, so run them at the same time. Done one after another the
     // window waits for the sum of every retry budget — about six seconds with all three
     // devices asleep, which is exactly when the user is staring at it.
-    std::thread::scope(|scope| {
-        let mut handles = Vec::with_capacity(SPECS.len());
-        for (index, spec) in SPECS.iter().enumerate() {
-            let spawned = std::thread::Builder::new()
-                .stack_size(96 * 1024)
-                .spawn_scoped(scope, move || (index, read_with_own_api(spec, clock)));
-            if let Ok(handle) = spawned {
-                handles.push(handle);
-            }
+    //
+    // The threads are detached on purpose: a HID call can wedge inside the driver and no
+    // API cancels it, so waiting for a join would freeze the window forever. The deadline
+    // below is what actually bounds a refresh.
+    let mut started = 0;
+    for (index, spec) in SPECS.iter().enumerate() {
+        if OUTSTANDING_READS.load(Ordering::Relaxed) >= MAX_OUTSTANDING_READS {
+            break;
         }
-        for handle in handles {
-            if let Ok((index, reading)) = handle.join() {
-                results[index] = Some(reading);
-            }
+        OUTSTANDING_READS.fetch_add(1, Ordering::Relaxed);
+        let sender = sender.clone();
+        let spawned = std::thread::Builder::new()
+            .stack_size(96 * 1024)
+            .spawn(move || {
+                let reading = read_with_own_api(spec, &SystemClock);
+                OUTSTANDING_READS.fetch_sub(1, Ordering::Relaxed);
+                let _ = sender.send((index, reading));
+            });
+        if spawned.is_ok() {
+            started += 1;
+        } else {
+            OUTSTANDING_READS.fetch_sub(1, Ordering::Relaxed);
         }
-    });
+    }
+    drop(sender);
 
-    // A slot whose thread could not start (or panicked) is read inline instead of being
-    // left stuck on "reading" forever.
-    for (index, slot) in results.iter_mut().enumerate() {
-        if slot.is_none() {
-            *slot = Some(read_with_own_api(&SPECS[index], clock));
+    let deadline = Instant::now() + READ_DEADLINE;
+    for _ in 0..started {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match receiver.recv_timeout(remaining) {
+            Ok((index, reading)) => results[index] = Some(reading),
+            // Out of time: whatever has not answered is reported as such, and the flag
+            // that gates the next refresh is released by the caller as usual.
+            Err(_) => break,
         }
     }
 
+    assemble(results)
+}
+
+fn assemble(results: Vec<Option<DeviceReading>>) -> Snapshot {
     let mut snapshot = Snapshot {
         mouse: DeviceReading::loading(DeviceKind::Mouse),
         keyboard: DeviceReading::loading(DeviceKind::Keyboard),
@@ -143,7 +171,8 @@ fn read_all(clock: &dyn Clock) -> Snapshot {
         initial: false,
     };
 
-    for reading in results.into_iter().flatten() {
+    for (index, result) in results.into_iter().enumerate() {
+        let reading = result.unwrap_or_else(|| timed_out_reading(&SPECS[index]));
         match reading.kind {
             DeviceKind::Mouse => snapshot.mouse = reading,
             DeviceKind::Keyboard => snapshot.keyboard = reading,
@@ -152,6 +181,17 @@ fn read_all(clock: &dyn Clock) -> Snapshot {
     }
 
     snapshot
+}
+
+/// What a device shows when its query never came back. Identity is unknown, so the previous
+/// value is not carried forward: it cannot be attributed to whatever is plugged in now.
+fn timed_out_reading(spec: &DeviceSpec) -> DeviceReading {
+    DeviceReading::resolved(
+        spec,
+        Reading::Unavailable("读取超时：设备未在限定时间内响应，请重新插拔接收器".into()),
+        None,
+        true,
+    )
 }
 
 /// Each thread opens its own hidapi instance: `HidApi` is not `Sync`, and sharing one would
@@ -298,6 +338,60 @@ fn carry_slot(next: &mut DeviceReading, previous: &DeviceReading) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn results_land_in_their_own_slots() {
+        let mouse = device(DeviceKind::Mouse, reading(42), "a", false);
+        let keyboard = device(DeviceKind::Keyboard, reading(7), "b", false);
+        let headset = device(
+            DeviceKind::Headset,
+            Reading::Unavailable("耳机未连接或已关闭".into()),
+            "c",
+            false,
+        );
+
+        let snapshot = assemble(vec![Some(mouse), Some(keyboard), Some(headset)]);
+
+        assert_eq!(snapshot.mouse.reading, reading(42));
+        assert_eq!(snapshot.keyboard.reading, reading(7));
+        assert_eq!(
+            snapshot.headset.reading,
+            Reading::Unavailable("耳机未连接或已关闭".into())
+        );
+    }
+
+    #[test]
+    fn a_missing_result_is_reported_as_a_timeout_instead_of_loading_forever() {
+        let snapshot = assemble(vec![None, None, None]);
+
+        for reading in [&snapshot.mouse, &snapshot.keyboard, &snapshot.headset] {
+            assert!(
+                matches!(&reading.reading, Reading::Unavailable(message) if message.contains("读取超时")),
+                "expected a timeout message, got {:?}",
+                reading.reading
+            );
+        }
+    }
+
+    #[test]
+    fn a_timeout_does_not_reuse_the_previous_value() {
+        let previous = snapshot(
+            device(DeviceKind::Keyboard, reading(77), "wireless-1234", false),
+            device(DeviceKind::Mouse, reading(50), "mouse", false),
+            device(
+                DeviceKind::Headset,
+                Reading::Unavailable("x".into()),
+                "headset",
+                false,
+            ),
+        );
+
+        let mut next = assemble(vec![None, None, None]);
+        carry_forward(&mut next, &previous);
+
+        // Identity is unknown after a timeout, so nothing may be carried onto it.
+        assert!(!matches!(next.keyboard.reading, Reading::Stale(_)));
+    }
 
     /// Not part of the suite: it talks to real hardware. Run it by hand to see how long a
     /// full refresh takes with whatever is plugged in.

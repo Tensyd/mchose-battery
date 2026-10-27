@@ -1,6 +1,6 @@
 [package]
 name = "mc-battery"
-version = "0.6.1"
+version = "0.6.2"
 edition = "2024"
 
 [dependencies]
@@ -8,6 +8,7 @@ hidapi = { version = "2.6", default-features = false, features = ["windows-nativ
 windows-sys = { version = "0.60", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
+    "Win32_Security",
     "Win32_System_LibraryLoader",
     "Win32_System_Registry",
     "Win32_System_Threading",
