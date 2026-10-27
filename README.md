@@ -1,5 +1,7 @@
 # MC Battery
 
+[![CI](https://github.com/Tensyd/mchose-battery/actions/workflows/ci.yml/badge.svg)](https://github.com/Tensyd/mchose-battery/actions/workflows/ci.yml)
+
 专为迈从（MCHOSE）无线外设打造的**极简轻量电量托盘小工具**。
 
 摒弃臃肿复杂的官方控制驱动，追求极致纯净与性能：**只专注显示电量、单文件绿色免安装、实测内存仅 ~1.4 MB、静置 CPU 占用恒为 0%**。
