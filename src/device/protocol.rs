@@ -466,7 +466,7 @@ mod tests {
         );
         // One send per attempt, and the confirmed pair stops the loop early.
         assert_eq!(link.sent_features.len(), 2);
-        assert_eq!(clock.slept_ms.get(), 2 * A7_ATTEMPT_GAP_MS);
+        assert_eq!(clock.slept_ms.load(std::sync::atomic::Ordering::Relaxed), 2 * A7_ATTEMPT_GAP_MS);
     }
 
     #[test]
@@ -495,7 +495,7 @@ mod tests {
         let error = A7.read(&mut link, &clock).unwrap_err();
         assert_eq!(error.kind, ReadErrorKind::NoResponse);
         assert_eq!(link.sent_features.len(), A7_ATTEMPTS);
-        assert_eq!(clock.slept_ms.get(), A7_ATTEMPTS as u64 * A7_ATTEMPT_GAP_MS);
+        assert_eq!(clock.slept_ms.load(std::sync::atomic::Ordering::Relaxed), A7_ATTEMPTS as u64 * A7_ATTEMPT_GAP_MS);
     }
 
     #[test]

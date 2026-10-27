@@ -5,7 +5,7 @@ mod transport;
 
 pub use match_rules::InterfaceFacts;
 pub use protocol::{ReadError, ReadErrorKind};
-pub use spec::{DeviceSpec, RetainPolicy, Slot, SPECS};
+pub use spec::{DeviceSpec, RetainPolicy, SPECS};
 pub use transport::{Clock, SystemClock, SystemLink};
 
 use hidapi::{DeviceInfo, HidApi};
@@ -99,46 +99,72 @@ impl Snapshot {
             initial: true,
         }
     }
-
-    fn all_unavailable(message: &str) -> Self {
-        let reading = |kind| {
-            DeviceReading::resolved(spec::spec_for(kind), Reading::Unavailable(message.into()), None, false)
-        };
-        Self {
-            mouse: reading(DeviceKind::Mouse),
-            keyboard: reading(DeviceKind::Keyboard),
-            headset: reading(DeviceKind::Headset),
-            initial: false,
-        }
-    }
 }
 
 pub fn read_snapshot() -> Snapshot {
-    match HidApi::new() {
-        Ok(api) => read_all(&api, &SystemClock),
-        Err(error) => Snapshot::all_unavailable(&format!("HID 初始化失败：{error}")),
-    }
+    read_all(&SystemClock)
 }
 
-fn read_all(api: &HidApi, clock: &dyn Clock) -> Snapshot {
-    let mut mouse = DeviceReading::loading(DeviceKind::Mouse);
-    let mut keyboard = DeviceReading::loading(DeviceKind::Keyboard);
-    let mut headset = DeviceReading::loading(DeviceKind::Headset);
+fn read_all(clock: &dyn Clock) -> Snapshot {
+    let mut results: Vec<Option<DeviceReading>> = SPECS.iter().map(|_| None).collect();
 
-    for spec in SPECS.iter() {
-        let reading = read_one(api, spec, clock);
-        match spec.slot {
-            Slot::Mouse => mouse = reading,
-            Slot::Keyboard => keyboard = reading,
-            Slot::Headset => headset = reading,
+    // Queries are independent, so run them at the same time. Done one after another the
+    // window waits for the sum of every retry budget — about six seconds with all three
+    // devices asleep, which is exactly when the user is staring at it.
+    std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(SPECS.len());
+        for (index, spec) in SPECS.iter().enumerate() {
+            let spawned = std::thread::Builder::new()
+                .stack_size(96 * 1024)
+                .spawn_scoped(scope, move || (index, read_with_own_api(spec, clock)));
+            if let Ok(handle) = spawned {
+                handles.push(handle);
+            }
+        }
+        for handle in handles {
+            if let Ok((index, reading)) = handle.join() {
+                results[index] = Some(reading);
+            }
+        }
+    });
+
+    // A slot whose thread could not start (or panicked) is read inline instead of being
+    // left stuck on "reading" forever.
+    for (index, slot) in results.iter_mut().enumerate() {
+        if slot.is_none() {
+            *slot = Some(read_with_own_api(&SPECS[index], clock));
         }
     }
 
-    Snapshot {
-        mouse,
-        keyboard,
-        headset,
+    let mut snapshot = Snapshot {
+        mouse: DeviceReading::loading(DeviceKind::Mouse),
+        keyboard: DeviceReading::loading(DeviceKind::Keyboard),
+        headset: DeviceReading::loading(DeviceKind::Headset),
         initial: false,
+    };
+
+    for reading in results.into_iter().flatten() {
+        match reading.kind {
+            DeviceKind::Mouse => snapshot.mouse = reading,
+            DeviceKind::Keyboard => snapshot.keyboard = reading,
+            DeviceKind::Headset => snapshot.headset = reading,
+        }
+    }
+
+    snapshot
+}
+
+/// Each thread opens its own hidapi instance: `HidApi` is not `Sync`, and sharing one would
+/// serialise the enumeration anyway.
+fn read_with_own_api(spec: &DeviceSpec, clock: &dyn Clock) -> DeviceReading {
+    match HidApi::new() {
+        Ok(api) => read_one(&api, spec, clock),
+        Err(error) => DeviceReading::resolved(
+            spec,
+            Reading::Unavailable(format!("HID 初始化失败：{error}")),
+            None,
+            false,
+        ),
     }
 }
 
@@ -272,6 +298,20 @@ fn carry_slot(next: &mut DeviceReading, previous: &DeviceReading) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Not part of the suite: it talks to real hardware. Run it by hand to see how long a
+    /// full refresh takes with whatever is plugged in.
+    #[test]
+    #[ignore = "talks to real devices; run with --ignored --nocapture"]
+    fn measure_full_read_latency() {
+        let started = std::time::Instant::now();
+        let snapshot = read_snapshot();
+        let elapsed = started.elapsed();
+        println!(
+            "full read: {elapsed:?} | mouse {:?} | keyboard {:?} | headset {:?}",
+            snapshot.mouse.reading, snapshot.keyboard.reading, snapshot.headset.reading
+        );
+    }
 
     fn reading(percent: u8) -> Reading {
         Reading::Available(BatteryReading { percent })

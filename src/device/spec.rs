@@ -9,13 +9,6 @@ use crate::device::protocol::{A7_PROTOCOL, G87_PROTOCOL, Protocol, V9_PROTOCOL};
 use crate::device::DeviceKind;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Slot {
-    Mouse,
-    Keyboard,
-    Headset,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RetainPolicy {
     /// Keep the last reading, greyed out, when the device stops answering. Only used
     /// where a sleeping device is a normal state rather than a failure.
@@ -42,7 +35,6 @@ impl ProtocolId {
 }
 
 pub struct DeviceSpec {
-    pub slot: Slot,
     pub kind: DeviceKind,
     pub model: &'static str,
     pub vendor_id: u16,
@@ -60,7 +52,6 @@ pub struct DeviceSpec {
 /// Supported devices, verified on hardware in this program. Order matches the UI.
 pub static SPECS: [DeviceSpec; 3] = [
     DeviceSpec {
-        slot: Slot::Mouse,
         kind: DeviceKind::Mouse,
         model: "A7 V2 Ultra+",
         vendor_id: 0x3837,
@@ -73,7 +64,6 @@ pub static SPECS: [DeviceSpec; 3] = [
         missing: "未检测到接收器",
     },
     DeviceSpec {
-        slot: Slot::Keyboard,
         kind: DeviceKind::Keyboard,
         model: "G87 V2",
         vendor_id: 0x3837,
@@ -86,7 +76,6 @@ pub static SPECS: [DeviceSpec; 3] = [
         missing: "未检测到接收器",
     },
     DeviceSpec {
-        slot: Slot::Headset,
         kind: DeviceKind::Headset,
         model: "V9 PRO",
         vendor_id: 0x291D,

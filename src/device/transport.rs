@@ -16,7 +16,7 @@ pub trait Link {
 }
 
 /// Sleeping is injected so that offline tests do not spend the protocol's real budget.
-pub trait Clock {
+pub trait Clock: Sync {
     fn sleep_ms(&self, millis: u64);
 }
 
@@ -152,12 +152,13 @@ pub(crate) mod mock {
     /// Records the requested delays instead of waiting for them.
     #[derive(Default)]
     pub struct FakeClock {
-        pub slept_ms: std::cell::Cell<u64>,
+        pub slept_ms: std::sync::atomic::AtomicU64,
     }
 
     impl Clock for FakeClock {
         fn sleep_ms(&self, millis: u64) {
-            self.slept_ms.set(self.slept_ms.get() + millis);
+            self.slept_ms
+                .fetch_add(millis, std::sync::atomic::Ordering::Relaxed);
         }
     }
 }
