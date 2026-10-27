@@ -148,7 +148,7 @@ pub fn format_report(
 ) -> String {
     let mut report = String::new();
 
-    report.push_str("MCHOSE Battery 诊断报告\n");
+    report.push_str("MC Battery 诊断报告\n");
     report.push_str("========================\n");
     let _ = writeln!(report, "生成时间：{timestamp}");
     let _ = writeln!(report, "程序版本：{version}");
@@ -190,7 +190,7 @@ fn wide(text: &str) -> Vec<u16> {
 }
 
 fn message_box(text: &str, warning: bool) {
-    let caption = wide("MCHOSE Battery 诊断");
+    let caption = wide("MC Battery 诊断");
     let body = wide(text);
     let icon = if warning { MB_ICONWARNING } else { MB_ICONINFORMATION };
     unsafe {

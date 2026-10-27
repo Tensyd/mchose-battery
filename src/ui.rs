@@ -35,7 +35,7 @@ use crate::autostart;
 use crate::device::{DeviceKind, Reading, Snapshot, carry_forward, read_snapshot};
 use crate::tray::{MENU_EXIT, MENU_SHOW_WINDOW, Tray, WM_APP_TRAY, create_app_icon};
 
-const APP_TITLE: &str = "MCHOSE 电量";
+const APP_TITLE: &str = "MC Battery";
 const CLIENT_WIDTH: i32 = 430;
 const CLIENT_HEIGHT: i32 = 332;
 const WM_APP_REFRESH: u32 = 0x8001;
@@ -145,7 +145,7 @@ pub fn run(start_hidden: bool) {
 
     // An entry written by an older build has no `--silent` flag; rewrite it so the next
     // boot starts in the tray like the current setting promises.
-    autostart::migrate_to_silent_start();
+    autostart::sync();
 
     let taskbar_created = unsafe { RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()) };
     TASKBAR_CREATED.store(taskbar_created, Ordering::Relaxed);

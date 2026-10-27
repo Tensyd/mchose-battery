@@ -149,11 +149,11 @@ fn copy_tip(data: &mut NOTIFYICONDATAW, text: &str) {
 
 pub fn tooltip_text(snapshot: &Snapshot) -> String {
     if snapshot.initial {
-        return "MCHOSE 电量  |  正在读取设备…".to_string();
+        return "MC Battery  |  正在读取设备…".to_string();
     }
 
     format!(
-        "MCHOSE 电量  |  鼠标 {}  ·  键盘 {}  ·  耳机 {}",
+        "MC Battery  |  鼠标 {}  ·  键盘 {}  ·  耳机 {}",
         percent_label(&snapshot.mouse.reading),
         percent_label(&snapshot.keyboard.reading),
         percent_label(&snapshot.headset.reading),
@@ -281,7 +281,7 @@ mod tests {
         let text = tooltip_text(&snapshot());
         assert_eq!(
             text,
-            "MCHOSE 电量  |  鼠标 85%  ·  键盘 68%  ·  耳机 --"
+            "MC Battery  |  鼠标 85%  ·  键盘 68%  ·  耳机 --"
         );
         assert!(text.encode_utf16().count() < 128);
     }
@@ -290,7 +290,7 @@ mod tests {
     fn tooltip_has_loading_state() {
         assert_eq!(
             tooltip_text(&Snapshot::loading()),
-            "MCHOSE 电量  |  正在读取设备…"
+            "MC Battery  |  正在读取设备…"
         );
     }
 }

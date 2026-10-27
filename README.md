@@ -1,4 +1,4 @@
-# MCHOSE Battery
+# MC Battery
 
 专为迈从（MCHOSE）无线外设打造的**极简轻量电量托盘小工具**。
 
@@ -47,7 +47,7 @@
 
 无需安装任何环境，直接下载单文件即可运行：
 
-👉 **前往 [Releases 页面](https://github.com/Tensyd/mchose-battery/releases) 下载最新版 `MCHOSE-Battery.exe`**，双击直接运行。
+👉 **前往 [Releases 页面](https://github.com/Tensyd/mchose-battery/releases) 下载最新版 `MC-Battery.exe`**，双击直接运行。
 
 支持系统：Windows 10 / Windows 11（x64）。
 
@@ -68,7 +68,7 @@
 程序带一个只读的接口诊断模式，**不打开设备、不发任何指令**，只列出系统看到的 HID 接口：
 
 ```powershell
-MCHOSE-Battery.exe --diagnose
+MC-Battery.exe --diagnose
 ```
 
 报告生成在 exe 同目录的 `mchose-diagnose.txt`（目录不可写时改存临时目录），其中包含厂商自定义接口清单、已知厂商 ID 的其他接口，以及三款已支持型号是否被识别。报告不读取序列号与设备路径，可以放心贴到 issue 里。
@@ -99,7 +99,7 @@ cd mchose-battery
 cargo build --release
 ```
 
-产物位于 `target/release/mchose-battery.exe`。`build.rs` 会自动将 `assets/app.ico` 编译为内部资源段链接至二进制中，无需额外安装资源编译器。
+产物位于 `target/release/mc-battery.exe`。`build.rs` 会自动将 `assets/app.ico` 编译为内部资源段链接至二进制中，无需额外安装资源编译器。
 
 ---
 
