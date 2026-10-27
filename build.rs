@@ -233,6 +233,10 @@ fn push_data_entry(blob: &mut Vec<u8>, offset: u32, size: u32) {
 }
 
 /// GRPICONDIR: the icon group Explorer shows, referencing the images by id.
+///
+/// Entry layout is 14 bytes: bWidth, bHeight, bColorCount, bReserved, wPlanes, wBitCount,
+/// dwBytesInRes, wID. The id is a WORD — writing it as a DWORD shifts every following
+/// entry, which leaves the shell reading one valid entry and garbage after it.
 fn group_icon(images: &[IconImage]) -> Vec<u8> {
     let mut group = Vec::new();
     group.extend_from_slice(&0_u16.to_le_bytes()); // reserved
@@ -247,8 +251,10 @@ fn group_icon(images: &[IconImage]) -> Vec<u8> {
         group.extend_from_slice(&image.planes.to_le_bytes());
         group.extend_from_slice(&image.bit_count.to_le_bytes());
         group.extend_from_slice(&(image.data.len() as u32).to_le_bytes());
-        group.extend_from_slice(&((index as u32) + 1).to_le_bytes()); // RT_ICON id
+        group.extend_from_slice(&((index as u16) + 1).to_le_bytes()); // RT_ICON id
     }
+
+    debug_assert_eq!(group.len(), 6 + 14 * images.len());
     group
 }
 

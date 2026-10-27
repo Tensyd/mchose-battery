@@ -1,6 +1,6 @@
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -14,16 +14,17 @@ use windows_sys::Win32::Graphics::Gdi::{
     TRANSPARENT, Arc as GdiArc,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::HiDpi::{
     AdjustWindowRectExForDpi, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForWindow,
     SetProcessDpiAwarenessContext,
 };
-use windows_sys::Win32::UI::Input::Ime::ImmAssociateContextEx;
+use windows_sys::Win32::UI::Input::Ime::{ImmAssociateContextEx, ImmDisableIME, ImmDisableTextFrameService};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DestroyWindow,
     DefWindowProcW, DispatchMessageW, GWLP_USERDATA, GetClientRect, GetCursorPos, GetMessageW,
     ICON_BIG, ICON_SMALL, IDC_ARROW, IDC_HAND, IsWindow, LoadCursorW, MSG, PostMessageW,
-    PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOW, SendMessageW, SetCursor, SetForegroundWindow,
+    PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SW_HIDE, SW_SHOW, SendMessageW, SetCursor, SetForegroundWindow,
     SetWindowLongPtrW, ShowWindow, TranslateMessage, WM_ACTIVATE, WM_CLOSE, WM_COMMAND,
     WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_LBUTTONUP, WM_NCCREATE, WM_PAINT,
     WM_RBUTTONUP, WM_SETCURSOR, WM_SETICON, WNDCLASSW, WS_CAPTION, WS_MINIMIZEBOX, WS_OVERLAPPED,
@@ -47,6 +48,9 @@ const LOGO_HEIGHT: i32 = 33;
 
 /// Set while a one-shot read is in flight, so focus + click cannot stack reads.
 static REFRESHING: AtomicBool = AtomicBool::new(false);
+/// Window message the shell broadcasts after Explorer restarts; the tray icon has to be
+/// registered again or it stays missing for the rest of the session.
+static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 
 const BG: COLORREF = rgb(247, 248, 250);
 const CARD: COLORREF = rgb(255, 255, 255);
@@ -132,11 +136,19 @@ impl Drop for Surface {
 pub fn run(start_hidden: bool) {
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        // There is no text input anywhere in this UI, so opt the thread out of the text
+        // services framework. Without this, the active input method loads its TIP and a
+        // DirectWrite stack into the process the moment the window takes focus.
+        ImmDisableTextFrameService(GetCurrentThreadId());
+        ImmDisableIME(0);
     }
 
     // An entry written by an older build has no `--silent` flag; rewrite it so the next
     // boot starts in the tray like the current setting promises.
     autostart::migrate_to_silent_start();
+
+    let taskbar_created = unsafe { RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()) };
+    TASKBAR_CREATED.store(taskbar_created, Ordering::Relaxed);
 
     let snapshot = Arc::new(Mutex::new(Snapshot::loading()));
     let class_name = wide("MchoseBatteryWindow");
@@ -282,6 +294,14 @@ unsafe extern "system" fn window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     unsafe {
+        // Explorer restarting wipes every tray icon; re-register ours when it announces
+        // that the taskbar is back.
+        let taskbar_created = TASKBAR_CREATED.load(Ordering::Relaxed);
+        if taskbar_created != 0 && message == taskbar_created {
+            restore_tray(hwnd);
+            return 0;
+        }
+
         match message {
             WM_NCCREATE => {
                 let create = &*(lparam as *const CREATESTRUCTW);
@@ -407,6 +427,22 @@ unsafe fn show_main_window(hwnd: HWND) {
     unsafe {
         ShowWindow(hwnd, SW_SHOW);
         SetForegroundWindow(hwnd);
+    }
+}
+
+/// Re-adds the tray icon after the shell restarted.
+unsafe fn restore_tray(hwnd: HWND) {
+    let snapshot = match unsafe { context(hwnd) } {
+        Some(context) => context.snapshot.lock().map(|state| state.clone()).ok(),
+        None => None,
+    };
+    let Some(snapshot) = snapshot else {
+        return;
+    };
+    if let Some(context) = unsafe { context_mut(hwnd) } {
+        // Dropping the old registration first avoids leaving a dead handle behind.
+        context.tray = None;
+        context.tray = Tray::new(hwnd, &snapshot);
     }
 }
 
