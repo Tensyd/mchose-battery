@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    env:
+      # The release build uses the GNU toolchain, so CI has to as well: dlltool/as come
+      # from the MSYS2 that ships with the runner image, not from rustup.
+      CARGO_TARGET: x86_64-pc-windows-gnu
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the GNU toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+          components: clippy
+
+      - name: Put mingw binutils on PATH
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'C:\msys64\mingw64\bin\dlltool.exe')) {
+            throw 'dlltool not found; the runner image changed'
+          }
+          'C:\msys64\mingw64\bin' | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.CARGO_TARGET }}
+
+      - name: Test
+        run: cargo test --target $env:CARGO_TARGET
+
+      - name: Clippy
+        run: cargo clippy --target $env:CARGO_TARGET --all-targets -- -D warnings
+
+      - name: Build release binary
+        run: cargo build --target $env:CARGO_TARGET --release
+
+      - name: Keep the binary for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: mc-battery-gnu
+          path: target/x86_64-pc-windows-gnu/release/mc-battery.exe
+          if-no-files-found: warn
