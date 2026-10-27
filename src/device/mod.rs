@@ -4,7 +4,7 @@ mod spec;
 mod transport;
 
 pub use match_rules::InterfaceFacts;
-pub use protocol::ReadErrorKind;
+pub use protocol::{ReadError, ReadErrorKind};
 pub use spec::{DeviceSpec, RetainPolicy, Slot, SPECS};
 pub use transport::{Clock, SystemClock, SystemLink};
 
@@ -142,35 +142,76 @@ fn read_all(api: &HidApi, clock: &dyn Clock) -> Snapshot {
     }
 }
 
+/// The result of a single read-only battery query, kept structured for diagnostics.
+#[derive(Clone, Debug)]
+pub struct ProbeResult {
+    pub model: &'static str,
+    /// Whether a matching interface is plugged in. A missing receiver is a different
+    /// problem from an unreachable device, and the report should not conflate them.
+    pub present: bool,
+    pub outcome: Result<u8, ReadError>,
+}
+
 /// Locates and queries one device. A device that is not found, or whose interface cannot
 /// be opened, is never written to.
-fn read_one(api: &HidApi, spec: &DeviceSpec, clock: &dyn Clock) -> DeviceReading {
+fn probe_one(api: &HidApi, spec: &DeviceSpec, clock: &dyn Clock) -> ProbeResult {
     let Some(info) = find(api, spec) else {
-        return DeviceReading::resolved(
-            spec,
-            Reading::Unavailable(spec.missing.into()),
-            None,
-            false,
-        );
+        return ProbeResult {
+            model: spec.model,
+            present: false,
+            outcome: Err(ReadError::not_present(spec.missing)),
+        };
     };
 
-    let identity = Some(identity_of(info));
     let device = match info.open_device(api) {
         Ok(device) => device,
         Err(error) => {
-            return DeviceReading::resolved(
-                spec,
-                Reading::Unavailable(format!("{}：{error}", spec.open_failure)),
-                identity,
-                false,
-            );
+            return ProbeResult {
+                model: spec.model,
+                present: true,
+                outcome: Err(ReadError::open_failed(format!(
+                    "{}：{error}",
+                    spec.open_failure
+                ))),
+            };
         }
     };
 
     let mut link = SystemLink::new(device);
-    let query = spec.protocol.implementation().read(&mut link, clock);
-    match query {
-        Ok(reading) => DeviceReading::resolved(spec, Reading::Available(reading), identity, false),
+    let outcome = spec
+        .protocol
+        .implementation()
+        .read(&mut link, clock)
+        .map(|reading| reading.percent);
+
+    ProbeResult {
+        model: spec.model,
+        present: true,
+        outcome,
+    }
+}
+
+/// Performs one read-only query per supported device and returns structured results.
+///
+/// Used by `--diagnose --probe`: the snapshot machinery flattens errors into display
+/// text, but a bug report needs to tell "receiver missing" apart from "device asleep".
+pub fn probe() -> Result<Vec<ProbeResult>, String> {
+    let api = HidApi::new().map_err(|error| format!("HID 初始化失败：{error}"))?;
+    Ok(SPECS
+        .iter()
+        .map(|spec| probe_one(&api, spec, &SystemClock))
+        .collect())
+}
+
+fn read_one(api: &HidApi, spec: &DeviceSpec, clock: &dyn Clock) -> DeviceReading {
+    let identity = find(api, spec).map(identity_of);
+    match probe_one(api, spec, clock).outcome {
+        Ok(percent) => DeviceReading::resolved(
+            spec,
+            Reading::Available(BatteryReading { percent }),
+            identity,
+            false,
+        ),
         Err(error) => {
             let timed_out = error.kind == ReadErrorKind::NoResponse;
             DeviceReading::resolved(spec, Reading::Unavailable(error.detail), identity, timed_out)

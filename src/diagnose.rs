@@ -138,6 +138,36 @@ fn match_line(spec: &DeviceSpec, entries: &[&InterfaceEntry]) -> String {
     )
 }
 
+/// One line of the read-out section. `--probe` is what turns "the device shows --" into
+/// an actionable answer instead of a guess.
+pub fn probe_line(result: &crate::device::ProbeResult) -> String {
+    let outcome = match &result.outcome {
+        Ok(percent) => format!("{percent}%"),
+        // Most details already name the cause ("无响应，按任意键唤醒"); only add the
+        // category when it says something the sentence does not.
+        Err(error) if error.detail.contains(error.kind.label()) => error.detail.clone(),
+        Err(error) => format!("{}（{}）", error.detail, error.kind.label()),
+    };
+    format!("  {:<14} {}", result.model, outcome)
+}
+
+fn push_probe_section(report: &mut String, results: Option<&[crate::device::ProbeResult]>) {
+    report.push_str("[4 电量读取]\n");
+    match results {
+        Some(results) => {
+            for result in results {
+                report.push_str(&probe_line(result));
+                report.push('\n');
+            }
+            report.push_str("  以上为只读查询；未向未知接口发送任何报文。\n");
+        }
+        None => {
+            report.push_str("  （默认只枚举，不读取。加 --probe 执行只读电量查询。）\n");
+        }
+    }
+    report.push('\n');
+}
+
 /// Formats the whole report. Split out from `collect()` so the shape of the output can be
 /// tested without HID hardware.
 pub fn format_report(
@@ -145,6 +175,7 @@ pub fn format_report(
     version: &str,
     timestamp: &str,
     os_line: &str,
+    results: Option<&[crate::device::ProbeResult]>,
 ) -> String {
     let mut report = String::new();
 
@@ -155,8 +186,12 @@ pub fn format_report(
     let _ = writeln!(report, "系统版本：{os_line}");
     let _ = writeln!(report, "HID 接口总数：{}", entries.len());
     report.push('\n');
-    report.push_str("说明：本报告仅枚举系统 HID 接口，未打开任何设备、未发送任何查询指令；\n");
-    report.push_str("      序列号与设备路径未读取，因此不会出现在报告里。\n");
+    report.push_str("说明：默认仅枚举系统 HID 接口；序列号与设备路径未读取，因此不会出现在报告里。\n");
+    if results.is_some() {
+        report.push_str("      本次额外执行了只读电量查询（--probe），仅针对已支持型号。\n");
+    } else {
+        report.push_str("      未打开任何设备、未发送任何查询指令。\n");
+    }
     report.push('\n');
 
     let vendor: Vec<&InterfaceEntry> = entries
@@ -178,6 +213,8 @@ pub fn format_report(
         report.push('\n');
     }
     report.push('\n');
+
+    push_probe_section(&mut report, results);
 
     report.push_str("提交新型号信息时，请附上本文件、该型号的完整名称与固件版本，\n");
     report.push_str("以及同一时刻官方软件显示的电量。缺少实测依据的型号不会被直接适配。\n");
@@ -249,7 +286,7 @@ fn report_path() -> (PathBuf, bool) {
 }
 
 /// Runs the diagnostic, writes the report and tells the user where it went.
-pub fn run() {
+pub fn run(probe: bool) {
     let entries = match collect() {
         Ok(entries) => entries,
         Err(error) => {
@@ -258,7 +295,27 @@ pub fn run() {
         }
     };
 
-    let report = format_report(&entries, env!("CARGO_PKG_VERSION"), &timestamp(), &os_line());
+    // Only an explicit `--probe` reads devices, and even then only the supported models:
+    // unknown interfaces are never opened or written to.
+    let results = if probe {
+        match crate::device::probe() {
+            Ok(results) => Some(results),
+            Err(error) => {
+                message_box(&format!("{error}\n\n电量查询未完成。"), true);
+                return;
+            }
+        }
+    } else {
+        None
+    };
+
+    let report = format_report(
+        &entries,
+        env!("CARGO_PKG_VERSION"),
+        &timestamp(),
+        &os_line(),
+        results.as_deref(),
+    );
 
     let (path, portable) = report_path();
     if let Err(error) = std::fs::write(&path, report.as_bytes()) {
@@ -266,10 +323,15 @@ pub fn run() {
         return;
     }
 
-    let found = SPECS
-        .iter()
-        .filter(|spec| entries.iter().any(|entry| spec.matches(&entry.facts())))
-        .count();
+    // When the probe ran, presence is known for certain; otherwise fall back to matching
+    // the enumerated interfaces.
+    let found = match results.as_deref() {
+        Some(results) => results.iter().filter(|result| result.present).count(),
+        None => SPECS
+            .iter()
+            .filter(|spec| entries.iter().any(|entry| spec.matches(&entry.facts())))
+            .count(),
+    };
 
     let note = if portable {
         String::new()
@@ -277,12 +339,33 @@ pub fn run() {
         "\n（程序目录不可写，已改存到临时目录）".to_string()
     };
 
+    let read_note = if probe {
+        format!(
+            "\n电量查询：{} 款成功，{} 款未读到。",
+            results
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .filter(|result| result.outcome.is_ok())
+                .count(),
+            results
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .filter(|result| result.outcome.is_err())
+                .count()
+        )
+    } else {
+        "\n未执行电量查询（如需，加 --probe）。".to_string()
+    };
+
     message_box(
         &format!(
-            "已枚举 {} 个 HID 接口，识别到 {} / {} 款已支持设备。\n\n报告位置：\n{}{}\n\n报告仅做被动枚举，未向设备发送任何指令。",
+            "已枚举 {} 个 HID 接口，识别到 {} / {} 款已支持设备。{}\n\n报告位置：\n{}{}\n\n序列号与设备路径未读取。",
             entries.len(),
             found,
             SPECS.len(),
+            read_note,
             path.display(),
             note
         ),
@@ -318,8 +401,77 @@ mod tests {
     }
 
     #[test]
+    fn probe_section_explains_how_to_enable_it() {
+        let report = format_report(
+            &sample(),
+            "0.6.0",
+            "2026-10-27 19:00:00",
+            "Windows 10.0.26100 (x86_64)",
+            None,
+        );
+        assert!(report.contains("[4 电量读取]"));
+        assert!(report.contains("加 --probe"));
+        assert!(report.contains("未打开任何设备"));
+    }
+
+    #[test]
+    fn probe_results_are_reported_per_device_with_their_reason() {
+        let results = vec![
+            crate::device::ProbeResult {
+                model: "A7 V2 Ultra+",
+                present: true,
+                outcome: Ok(86),
+            },
+            crate::device::ProbeResult {
+                model: "G87 V2",
+                present: false,
+                outcome: Err(crate::device::ReadError::not_present("未检测到接收器")),
+            },
+            crate::device::ProbeResult {
+                model: "V9 PRO",
+                present: true,
+                outcome: Err(crate::device::ReadError::no_response("耳机未连接或已关闭")),
+            },
+        ];
+
+        let report = format_report(
+            &sample(),
+            "0.6.0",
+            "2026-10-27 19:00:00",
+            "Windows 10.0.26100 (x86_64)",
+            Some(&results),
+        );
+
+        assert!(report.contains("A7 V2 Ultra+"));
+        assert!(report.contains("86%"));
+        assert!(report.contains("未检测到接收器"));
+        assert!(report.contains("耳机未连接或已关闭（无响应）"));
+        assert!(report.contains("本次额外执行了只读电量查询"));
+        // A probe run must not claim it was passive.
+        assert!(!report.contains("未打开任何设备"));
+    }
+
+    #[test]
+    fn probe_line_separates_a_missing_receiver_from_a_silent_device() {
+        let missing = crate::device::ProbeResult {
+            model: "G87 V2",
+            present: false,
+            outcome: Err(crate::device::ReadError::not_present("未检测到接收器")),
+        };
+        let silent = crate::device::ProbeResult {
+            model: "G87 V2",
+            present: true,
+            outcome: Err(crate::device::ReadError::no_response("无响应，按任意键唤醒")),
+        };
+
+        assert!(probe_line(&missing).contains("未检测到接收器"));
+        assert!(probe_line(&silent).contains("按任意键唤醒"));
+        assert_ne!(probe_line(&missing), probe_line(&silent));
+    }
+
+    #[test]
     fn only_vendor_collections_land_in_the_first_section() {
-        let report = format_report(&sample(), "0.3.0", "2026-10-27 19:00:00", "Windows 10.0.26100 (x86_64)");
+        let report = format_report(&sample(), "0.3.0", "2026-10-27 19:00:00", "Windows 10.0.26100 (x86_64)", None);
         let section = report
             .split("[2 已知厂商 ID 的其他接口]")
             .next()
@@ -337,7 +489,7 @@ mod tests {
 
     #[test]
     fn known_vendor_but_non_vendor_page_is_listed_separately() {
-        let report = format_report(&sample(), "0.3.0", "2026-10-27 19:00:00", "Windows 10.0.26100 (x86_64)");
+        let report = format_report(&sample(), "0.3.0", "2026-10-27 19:00:00", "Windows 10.0.26100 (x86_64)", None);
         let section = report
             .split("[2 已知厂商 ID 的其他接口]")
             .nth(1)
@@ -349,7 +501,7 @@ mod tests {
 
     #[test]
     fn known_models_report_whether_their_interface_is_present() {
-        let report = format_report(&sample(), "0.3.0", "2026-10-27 19:00:00", "Windows 10.0.26100 (x86_64)");
+        let report = format_report(&sample(), "0.3.0", "2026-10-27 19:00:00", "Windows 10.0.26100 (x86_64)", None);
 
         assert!(report.contains("A7 V2 Ultra+"));
         assert!(report.contains("V9 PRO"));
@@ -364,7 +516,7 @@ mod tests {
 
     #[test]
     fn report_states_that_nothing_was_sent_or_serialized() {
-        let report = format_report(&sample(), "0.3.0", "2026-10-27 19:00:00", "Windows 10.0.26100 (x86_64)");
+        let report = format_report(&sample(), "0.3.0", "2026-10-27 19:00:00", "Windows 10.0.26100 (x86_64)", None);
 
         assert!(report.contains("未发送任何查询指令"));
         assert!(report.contains("序列号与设备路径未读取"));
@@ -373,7 +525,7 @@ mod tests {
 
     #[test]
     fn an_empty_machine_still_produces_a_readable_report() {
-        let report = format_report(&[], "0.3.0", "2026-10-27 19:00:00", "Windows 10.0.26100 (x86_64)");
+        let report = format_report(&[], "0.3.0", "2026-10-27 19:00:00", "Windows 10.0.26100 (x86_64)", None);
 
         assert!(report.contains("HID 接口总数：0"));
         assert!(report.contains("（无）"));

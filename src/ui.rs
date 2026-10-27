@@ -315,6 +315,9 @@ unsafe extern "system" fn window_proc(
             WM_ERASEBKGND => 1,
             WM_ACTIVATE => {
                 if wparam & 0xFFFF != WA_INACTIVE {
+                    // The Run entry can change behind our back (registry editor, another
+                    // copy of the program); a switch that lies is worse than no switch.
+                    sync_autostart(hwnd);
                     request_refresh(hwnd);
                 }
                 0
@@ -427,6 +430,18 @@ unsafe fn show_main_window(hwnd: HWND) {
     unsafe {
         ShowWindow(hwnd, SW_SHOW);
         SetForegroundWindow(hwnd);
+    }
+}
+
+/// Re-reads the autostart switch from the registry and repaints when it disagrees with
+/// what is on screen.
+unsafe fn sync_autostart(hwnd: HWND) {
+    let enabled = autostart::is_enabled();
+    if let Some(context) = unsafe { context_mut(hwnd) }
+        && context.autostart != enabled
+    {
+        context.autostart = enabled;
+        unsafe { InvalidateRect(hwnd, std::ptr::null(), 1) };
     }
 }
 

@@ -9,12 +9,28 @@ use crate::device::BatteryReading;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReadErrorKind {
+    /// The receiver for this device is not plugged in.
+    NotPresent,
+    /// The interface exists but could not be opened.
+    OpenFailed,
     /// The query could not be written to the device.
     RequestFailed,
     /// The device accepted the query but returned nothing usable.
     NoResponse,
     /// A read failed outright, as opposed to timing out.
     ReadFailed,
+}
+
+impl ReadErrorKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::NotPresent => "未检测到接收器",
+            Self::OpenFailed => "接口打开失败",
+            Self::RequestFailed => "请求发送失败",
+            Self::NoResponse => "无响应",
+            Self::ReadFailed => "读取失败",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,6 +40,20 @@ pub struct ReadError {
 }
 
 impl ReadError {
+    pub fn not_present(detail: impl Into<String>) -> Self {
+        Self {
+            kind: ReadErrorKind::NotPresent,
+            detail: detail.into(),
+        }
+    }
+
+    pub fn open_failed(detail: impl Into<String>) -> Self {
+        Self {
+            kind: ReadErrorKind::OpenFailed,
+            detail: detail.into(),
+        }
+    }
+
     pub fn request_failed(detail: impl Into<String>) -> Self {
         Self {
             kind: ReadErrorKind::RequestFailed,
