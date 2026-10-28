@@ -4,8 +4,8 @@
 //! A protocol is not a model list: the same bytes are not evidence that a different
 //! model, firmware or connection mode behaves the same way.
 
-use crate::device::transport::{Clock, Link};
 use crate::device::BatteryReading;
+use crate::device::transport::{Clock, Link};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReadErrorKind {
@@ -455,10 +455,8 @@ mod tests {
 
     #[test]
     fn a7_reader_confirms_repeated_sample() {
-        let mut link = MockLink::with_feature_replies(vec![
-            Ok(verified_a7_reply()),
-            Ok(verified_a7_reply()),
-        ]);
+        let mut link =
+            MockLink::with_feature_replies(vec![Ok(verified_a7_reply()), Ok(verified_a7_reply())]);
         let clock = FakeClock::default();
         assert_eq!(
             A7.read(&mut link, &clock),
@@ -466,7 +464,10 @@ mod tests {
         );
         // One send per attempt, and the confirmed pair stops the loop early.
         assert_eq!(link.sent_features.len(), 2);
-        assert_eq!(clock.slept_ms.load(std::sync::atomic::Ordering::Relaxed), 2 * A7_ATTEMPT_GAP_MS);
+        assert_eq!(
+            clock.slept_ms.load(std::sync::atomic::Ordering::Relaxed),
+            2 * A7_ATTEMPT_GAP_MS
+        );
     }
 
     #[test]
@@ -481,7 +482,10 @@ mod tests {
             Err("read error".to_string()),
         ]);
         let clock = FakeClock::default();
-        assert_eq!(A7.read(&mut link, &clock), Ok(BatteryReading { percent: 85 }));
+        assert_eq!(
+            A7.read(&mut link, &clock),
+            Ok(BatteryReading { percent: 85 })
+        );
         assert_eq!(link.sent_features.len(), A7_ATTEMPTS);
     }
 
@@ -495,7 +499,10 @@ mod tests {
         let error = A7.read(&mut link, &clock).unwrap_err();
         assert_eq!(error.kind, ReadErrorKind::NoResponse);
         assert_eq!(link.sent_features.len(), A7_ATTEMPTS);
-        assert_eq!(clock.slept_ms.load(std::sync::atomic::Ordering::Relaxed), A7_ATTEMPTS as u64 * A7_ATTEMPT_GAP_MS);
+        assert_eq!(
+            clock.slept_ms.load(std::sync::atomic::Ordering::Relaxed),
+            A7_ATTEMPTS as u64 * A7_ATTEMPT_GAP_MS
+        );
     }
 
     #[test]
@@ -559,10 +566,8 @@ mod tests {
 
     #[test]
     fn v9_reader_accepts_first_valid_reply() {
-        let mut link = MockLink::with_input_replies(vec![
-            Ok(vec![0x00; 4]),
-            Ok(verified_v9_reply()),
-        ]);
+        let mut link =
+            MockLink::with_input_replies(vec![Ok(vec![0x00; 4]), Ok(verified_v9_reply())]);
         let clock = FakeClock::default();
         assert_eq!(
             V9.read(&mut link, &clock),

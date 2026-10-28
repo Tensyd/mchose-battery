@@ -71,12 +71,7 @@ impl DeviceReading {
 
     pub fn loading(kind: DeviceKind) -> Self {
         let spec = spec::spec_for(kind);
-        Self::resolved(
-            spec,
-            Reading::Unavailable("正在读取…".into()),
-            None,
-            false,
-        )
+        Self::resolved(spec, Reading::Unavailable("正在读取…".into()), None, false)
     }
 
     /// Builds a display-only reading for tests, without a device behind it.
@@ -280,7 +275,12 @@ fn read_one(api: &HidApi, spec: &DeviceSpec, clock: &dyn Clock) -> DeviceReading
         ),
         Err(error) => {
             let timed_out = error.kind == ReadErrorKind::NoResponse;
-            DeviceReading::resolved(spec, Reading::Unavailable(error.detail), identity, timed_out)
+            DeviceReading::resolved(
+                spec,
+                Reading::Unavailable(error.detail),
+                identity,
+                timed_out,
+            )
         }
     }
 }
@@ -411,7 +411,12 @@ mod tests {
         Reading::Available(BatteryReading { percent })
     }
 
-    fn device(kind: DeviceKind, reading: Reading, identity: &str, timed_out: bool) -> DeviceReading {
+    fn device(
+        kind: DeviceKind,
+        reading: Reading,
+        identity: &str,
+        timed_out: bool,
+    ) -> DeviceReading {
         let spec = spec::spec_for(kind);
         DeviceReading::resolved(spec, reading, Some(identity.to_string()), timed_out)
     }
@@ -433,14 +438,27 @@ mod tests {
             device(DeviceKind::Headset, reading(80), "headset-a", false),
         );
         let mut next = snapshot(
-            device(DeviceKind::Mouse, Reading::Unavailable("无响应".into()), "mouse-a", true),
+            device(
+                DeviceKind::Mouse,
+                Reading::Unavailable("无响应".into()),
+                "mouse-a",
+                true,
+            ),
             device(DeviceKind::Keyboard, reading(70), "keyboard-a", false),
-            device(DeviceKind::Headset, Reading::Unavailable("无响应".into()), "headset-a", true),
+            device(
+                DeviceKind::Headset,
+                Reading::Unavailable("无响应".into()),
+                "headset-a",
+                true,
+            ),
         );
 
         carry_forward(&mut next, &previous);
 
-        assert_eq!(next.mouse.reading, Reading::Stale(BatteryReading { percent: 68 }));
+        assert_eq!(
+            next.mouse.reading,
+            Reading::Stale(BatteryReading { percent: 68 })
+        );
         assert_eq!(next.keyboard.reading, reading(70));
         // The headset policy is `Never`: an unanswered headset does not keep a value.
         assert_eq!(next.headset.reading, Reading::Unavailable("无响应".into()));
@@ -463,7 +481,10 @@ mod tests {
 
         carry_forward(&mut next, &previous);
 
-        assert_eq!(next.mouse.reading, Reading::Unavailable("未检测到接收器".into()));
+        assert_eq!(
+            next.mouse.reading,
+            Reading::Unavailable("未检测到接收器".into())
+        );
     }
 
     /// The regression this guards: replacing the receiver must not inherit the reading of
@@ -476,8 +497,18 @@ mod tests {
             device(DeviceKind::Headset, reading(80), "headset-a", false),
         );
         let mut next = snapshot(
-            device(DeviceKind::Mouse, Reading::Unavailable("无响应".into()), "mouse-b", true),
-            device(DeviceKind::Keyboard, Reading::Unavailable("无响应".into()), "keyboard-b", true),
+            device(
+                DeviceKind::Mouse,
+                Reading::Unavailable("无响应".into()),
+                "mouse-b",
+                true,
+            ),
+            device(
+                DeviceKind::Keyboard,
+                Reading::Unavailable("无响应".into()),
+                "keyboard-b",
+                true,
+            ),
             device(DeviceKind::Headset, reading(80), "headset-a", false),
         );
 
@@ -490,19 +521,32 @@ mod tests {
     #[test]
     fn a_stale_reading_stays_stale_on_the_next_timeout() {
         let previous = snapshot(
-            device(DeviceKind::Mouse, Reading::Stale(BatteryReading { percent: 68 }), "mouse-a", false),
+            device(
+                DeviceKind::Mouse,
+                Reading::Stale(BatteryReading { percent: 68 }),
+                "mouse-a",
+                false,
+            ),
             device(DeviceKind::Keyboard, reading(70), "keyboard-a", false),
             device(DeviceKind::Headset, reading(80), "headset-a", false),
         );
         let mut next = snapshot(
-            device(DeviceKind::Mouse, Reading::Unavailable("无响应".into()), "mouse-a", true),
+            device(
+                DeviceKind::Mouse,
+                Reading::Unavailable("无响应".into()),
+                "mouse-a",
+                true,
+            ),
             device(DeviceKind::Keyboard, reading(70), "keyboard-a", false),
             device(DeviceKind::Headset, reading(80), "headset-a", false),
         );
 
         carry_forward(&mut next, &previous);
 
-        assert_eq!(next.mouse.reading, Reading::Stale(BatteryReading { percent: 68 }));
+        assert_eq!(
+            next.mouse.reading,
+            Reading::Stale(BatteryReading { percent: 68 })
+        );
     }
 
     #[test]
@@ -535,7 +579,12 @@ mod tests {
     fn first_refresh_has_nothing_to_carry() {
         let previous = Snapshot::loading();
         let mut next = snapshot(
-            device(DeviceKind::Mouse, Reading::Unavailable("无响应".into()), "mouse-a", true),
+            device(
+                DeviceKind::Mouse,
+                Reading::Unavailable("无响应".into()),
+                "mouse-a",
+                true,
+            ),
             DeviceReading::loading(DeviceKind::Keyboard),
             DeviceReading::loading(DeviceKind::Headset),
         );

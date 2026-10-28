@@ -5,13 +5,13 @@ use std::sync::{Arc, Mutex};
 
 use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, BitBlt, CLEARTYPE_QUALITY,
+    Arc as GdiArc, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, BitBlt, CLEARTYPE_QUALITY,
     CLIP_DEFAULT_PRECIS, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen,
     CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_PITCH, DIB_RGB_COLORS, DeleteDC, DeleteObject,
     DrawTextW, EndPaint, FF_DONTCARE, FW_BOLD, FW_NORMAL, FillRect, HALFTONE, HBITMAP, HDC, HFONT,
-    InvalidateRect, LineTo, MoveToEx, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, RoundRect, SRCCOPY,
-    ScreenToClient, SelectObject, SetBkMode, SetStretchBltMode, SetTextColor, StretchDIBits,
-    TRANSPARENT, Arc as GdiArc,
+    InvalidateRect, LineTo, MoveToEx, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, RoundRect,
+    SRCCOPY, ScreenToClient, SelectObject, SetBkMode, SetStretchBltMode, SetTextColor,
+    StretchDIBits, TRANSPARENT,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
@@ -19,16 +19,18 @@ use windows_sys::Win32::UI::HiDpi::{
     AdjustWindowRectExForDpi, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForWindow,
     SetProcessDpiAwarenessContext,
 };
-use windows_sys::Win32::UI::Input::Ime::{ImmAssociateContextEx, ImmDisableIME, ImmDisableTextFrameService};
+use windows_sys::Win32::UI::Input::Ime::{
+    ImmAssociateContextEx, ImmDisableIME, ImmDisableTextFrameService,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DestroyWindow,
-    DefWindowProcW, DispatchMessageW, GWLP_USERDATA, GetClientRect, GetCursorPos, GetMessageW,
-    ICON_BIG, ICON_SMALL, IDC_ARROW, IDC_HAND, IsWindow, LoadCursorW, MSG, PostMessageW,
-    PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SW_HIDE, SW_SHOW, SendMessageW, SetCursor, SetForegroundWindow,
-    SetWindowLongPtrW, ShowWindow, TranslateMessage, WM_ACTIVATE, WM_CLOSE, WM_COMMAND,
-    WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_LBUTTONUP, WM_NCCREATE, WM_PAINT,
-    WM_RBUTTONUP, WM_SETCURSOR, WM_SETICON, WNDCLASSW, WS_CAPTION, WS_MINIMIZEBOX, WS_OVERLAPPED,
-    WS_SYSMENU, WS_VISIBLE,
+    CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
+    DispatchMessageW, GWLP_USERDATA, GetClientRect, GetCursorPos, GetMessageW, ICON_BIG,
+    ICON_SMALL, IDC_ARROW, IDC_HAND, IsWindow, LoadCursorW, MSG, PostMessageW, PostQuitMessage,
+    RegisterClassW, RegisterWindowMessageW, SW_HIDE, SW_SHOW, SendMessageW, SetCursor,
+    SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TranslateMessage, WM_ACTIVATE, WM_CLOSE,
+    WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_LBUTTONUP,
+    WM_NCCREATE, WM_PAINT, WM_RBUTTONUP, WM_SETCURSOR, WM_SETICON, WNDCLASSW, WS_CAPTION,
+    WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_VISIBLE,
 };
 
 use crate::autostart;
@@ -204,7 +206,11 @@ pub fn run(start_hidden: bool) {
             0,
             class_name.as_ptr(),
             title.as_ptr(),
-            if start_hidden { style } else { style | WS_VISIBLE },
+            if start_hidden {
+                style
+            } else {
+                style | WS_VISIBLE
+            },
             x,
             y,
             window_width,
@@ -231,7 +237,10 @@ pub fn run(start_hidden: bool) {
         if !start_hidden {
             ShowWindow(hwnd, SW_SHOW);
         }
-        let loading = snapshot.lock().map(|state| state.clone()).unwrap_or_else(|_| Snapshot::loading());
+        let loading = snapshot
+            .lock()
+            .map(|state| state.clone())
+            .unwrap_or_else(|_| Snapshot::loading());
         (*context_ptr).tray = Tray::new(hwnd, &loading);
         InvalidateRect(hwnd, std::ptr::null(), 1);
 
@@ -407,8 +416,9 @@ unsafe extern "system" fn window_proc(
 }
 
 unsafe fn context(hwnd: HWND) -> Option<&'static WindowContext> {
-    let pointer =
-        unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
+    let pointer = unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(hwnd, GWLP_USERDATA)
+    };
     if pointer == 0 {
         None
     } else {
@@ -417,8 +427,9 @@ unsafe fn context(hwnd: HWND) -> Option<&'static WindowContext> {
 }
 
 unsafe fn context_mut(hwnd: HWND) -> Option<&'static mut WindowContext> {
-    let pointer =
-        unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
+    let pointer = unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(hwnd, GWLP_USERDATA)
+    };
     if pointer == 0 {
         None
     } else {
@@ -536,7 +547,13 @@ unsafe fn paint(hwnd: HWND) {
 
 /// Keeps the back buffer and the fonts alive between repaints, rebuilding them only when
 /// the window size or the scale actually changes.
-unsafe fn prepare_surface(surface: &mut Surface, window_dc: HDC, width: i32, height: i32, scale: f32) {
+unsafe fn prepare_surface(
+    surface: &mut Surface,
+    window_dc: HDC,
+    width: i32,
+    height: i32,
+    scale: f32,
+) {
     unsafe {
         if surface.width != width || surface.height != height {
             if !surface.bitmap.is_null() {
@@ -661,7 +678,12 @@ unsafe fn draw_autostart(hdc: HDC, scale: f32, enabled: bool, label_font: HFONT)
         draw_text(
             hdc,
             "开机自启",
-            &mut rect(left - s(62.0, scale), top + s(1.0, scale), s(54.0, scale), bottom - top),
+            &mut rect(
+                left - s(62.0, scale),
+                top + s(1.0, scale),
+                s(54.0, scale),
+                bottom - top,
+            ),
             label_font,
             MUTED,
             0x00000002 | 0x00000004,
@@ -682,7 +704,11 @@ fn blend(fg: (u8, u8, u8), bg: (u8, u8, u8), alpha: f32) -> (u8, u8, u8) {
 
 #[inline]
 fn colorref_to_rgb(c: COLORREF) -> (u8, u8, u8) {
-    ((c & 0xFF) as u8, ((c >> 8) & 0xFF) as u8, ((c >> 16) & 0xFF) as u8)
+    (
+        (c & 0xFF) as u8,
+        ((c >> 8) & 0xFF) as u8,
+        ((c >> 16) & 0xFF) as u8,
+    )
 }
 
 unsafe fn draw_smooth_switch(
@@ -705,7 +731,11 @@ unsafe fn draw_smooth_switch(
     let off_color = (226, 232, 240);
     let off_border_color = (203, 213, 225);
     let knob_color = (255, 255, 255);
-    let knob_border_color = if enabled { (205, 212, 222) } else { (200, 205, 215) };
+    let knob_border_color = if enabled {
+        (205, 212, 222)
+    } else {
+        (200, 205, 215)
+    };
     let track_color = if enabled { accent_color } else { off_color };
 
     let r = ph as f32 / 2.0;
@@ -772,10 +802,10 @@ unsafe fn draw_smooth_switch(
             }
 
             let idx = row_offset + (x * 4) as usize;
-            buf[idx] = col.2;     // B
+            buf[idx] = col.2; // B
             buf[idx + 1] = col.1; // G
             buf[idx + 2] = col.0; // R
-            buf[idx + 3] = 255;   // A
+            buf[idx + 3] = 255; // A
         }
     }
 
@@ -1120,13 +1150,34 @@ unsafe fn draw_device_icon(
                 RoundRect(hdc, kx1, ky1, kx2, ky2, s(4.0, scale), s(4.0, scale));
                 for step in 0..4 {
                     let bx = kx1 + s(3.0 + step as f32 * 6.0, scale);
-                    fill_rect(hdc, bx, ky1 + s(3.0, scale), bx + s(4.0, scale), ky1 + s(5.5, scale), icon_color);
+                    fill_rect(
+                        hdc,
+                        bx,
+                        ky1 + s(3.0, scale),
+                        bx + s(4.0, scale),
+                        ky1 + s(5.5, scale),
+                        icon_color,
+                    );
                 }
                 for step in 0..4 {
                     let bx = kx1 + s(3.0 + step as f32 * 6.0, scale);
-                    fill_rect(hdc, bx, ky1 + s(7.5, scale), bx + s(4.0, scale), ky1 + s(10.0, scale), icon_color);
+                    fill_rect(
+                        hdc,
+                        bx,
+                        ky1 + s(7.5, scale),
+                        bx + s(4.0, scale),
+                        ky1 + s(10.0, scale),
+                        icon_color,
+                    );
                 }
-                fill_rect(hdc, kx1 + s(3.0, scale), ky1 + s(12.0, scale), kx1 + s(6.0, scale), ky1 + s(14.5, scale), icon_color);
+                fill_rect(
+                    hdc,
+                    kx1 + s(3.0, scale),
+                    ky1 + s(12.0, scale),
+                    kx1 + s(6.0, scale),
+                    ky1 + s(14.5, scale),
+                    icon_color,
+                );
                 draw_rounded_rect(
                     hdc,
                     kx1 + s(8.0, scale),
@@ -1138,7 +1189,14 @@ unsafe fn draw_device_icon(
                     icon_color,
                     scale,
                 );
-                fill_rect(hdc, kx2 - s(6.0, scale), ky1 + s(12.0, scale), kx2 - s(3.0, scale), ky1 + s(14.5, scale), icon_color);
+                fill_rect(
+                    hdc,
+                    kx2 - s(6.0, scale),
+                    ky1 + s(12.0, scale),
+                    kx2 - s(3.0, scale),
+                    ky1 + s(14.5, scale),
+                    icon_color,
+                );
             }
             DeviceKind::Headset => {
                 let hw = s(30.0, scale);
@@ -1179,13 +1237,39 @@ unsafe fn draw_device_icon(
                 let ch = s(14.0, scale);
                 let cup_y = hy1 + s(11.0, scale);
                 let left_cup_x = hx1 + s(1.0, scale);
-                RoundRect(hdc, left_cup_x, cup_y, left_cup_x + cw, cup_y + ch, s(4.0, scale), s(4.0, scale));
-                MoveToEx(hdc, left_cup_x + s(4.0, scale), cup_y + s(2.0, scale), std::ptr::null_mut());
+                RoundRect(
+                    hdc,
+                    left_cup_x,
+                    cup_y,
+                    left_cup_x + cw,
+                    cup_y + ch,
+                    s(4.0, scale),
+                    s(4.0, scale),
+                );
+                MoveToEx(
+                    hdc,
+                    left_cup_x + s(4.0, scale),
+                    cup_y + s(2.0, scale),
+                    std::ptr::null_mut(),
+                );
                 LineTo(hdc, left_cup_x + s(4.0, scale), cup_y + ch - s(2.0, scale));
 
                 let right_cup_x = hx2 - s(1.0, scale) - cw;
-                RoundRect(hdc, right_cup_x, cup_y, right_cup_x + cw, cup_y + ch, s(4.0, scale), s(4.0, scale));
-                MoveToEx(hdc, right_cup_x + s(3.0, scale), cup_y + s(2.0, scale), std::ptr::null_mut());
+                RoundRect(
+                    hdc,
+                    right_cup_x,
+                    cup_y,
+                    right_cup_x + cw,
+                    cup_y + ch,
+                    s(4.0, scale),
+                    s(4.0, scale),
+                );
+                MoveToEx(
+                    hdc,
+                    right_cup_x + s(3.0, scale),
+                    cup_y + s(2.0, scale),
+                    std::ptr::null_mut(),
+                );
                 LineTo(hdc, right_cup_x + s(3.0, scale), cup_y + ch - s(2.0, scale));
             }
         }
@@ -1300,7 +1384,10 @@ fn scale_units(value: i32, scale: f32) -> i32 {
 }
 
 fn wide(text: &str) -> Vec<u16> {
-    OsStr::new(text).encode_wide().chain(std::iter::once(0)).collect()
+    OsStr::new(text)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
 }
 
 fn screen_dpi() -> u32 {

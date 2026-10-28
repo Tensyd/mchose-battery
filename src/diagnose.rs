@@ -13,7 +13,9 @@ use std::path::PathBuf;
 use hidapi::HidApi;
 use windows_sys::Win32::Foundation::SYSTEMTIME;
 use windows_sys::Win32::System::SystemInformation::{GetLocalTime, OSVERSIONINFOW};
-use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MessageBoxW};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MessageBoxW,
+};
 
 use crate::device::{DeviceSpec, InterfaceFacts, SPECS};
 
@@ -107,7 +109,11 @@ fn describe(entry: &InterfaceEntry) -> String {
     if let Some(product) = entry.product.as_deref().filter(|text| !text.is_empty()) {
         let _ = write!(line, "  产品 \"{product}\"");
     }
-    if let Some(manufacturer) = entry.manufacturer.as_deref().filter(|text| !text.is_empty()) {
+    if let Some(manufacturer) = entry
+        .manufacturer
+        .as_deref()
+        .filter(|text| !text.is_empty())
+    {
         let _ = write!(line, "  厂商 \"{manufacturer}\"");
     }
     line
@@ -186,7 +192,9 @@ pub fn format_report(
     let _ = writeln!(report, "系统版本：{os_line}");
     let _ = writeln!(report, "HID 接口总数：{}", entries.len());
     report.push('\n');
-    report.push_str("说明：默认仅枚举系统 HID 接口；序列号与设备路径未读取，因此不会出现在报告里。\n");
+    report.push_str(
+        "说明：默认仅枚举系统 HID 接口；序列号与设备路径未读取，因此不会出现在报告里。\n",
+    );
     if results.is_some() {
         report.push_str("      本次额外执行了只读电量查询（--probe），仅针对已支持型号。\n");
     } else {
@@ -229,7 +237,11 @@ fn wide(text: &str) -> Vec<u16> {
 fn message_box(text: &str, warning: bool) {
     let caption = wide("MC Battery 诊断");
     let body = wide(text);
-    let icon = if warning { MB_ICONWARNING } else { MB_ICONINFORMATION };
+    let icon = if warning {
+        MB_ICONWARNING
+    } else {
+        MB_ICONINFORMATION
+    };
     unsafe {
         MessageBoxW(
             std::ptr::null_mut(),
@@ -377,7 +389,14 @@ pub fn run(probe: bool) {
 mod tests {
     use super::*;
 
-    fn entry(vid: u16, pid: u16, page: u16, usage: u16, interface: i32, product: &str) -> InterfaceEntry {
+    fn entry(
+        vid: u16,
+        pid: u16,
+        page: u16,
+        usage: u16,
+        interface: i32,
+        product: &str,
+    ) -> InterfaceEntry {
         InterfaceEntry {
             vendor_id: vid,
             product_id: pid,
@@ -461,7 +480,9 @@ mod tests {
         let silent = crate::device::ProbeResult {
             model: "G87 V2",
             present: true,
-            outcome: Err(crate::device::ReadError::no_response("无响应，按任意键唤醒")),
+            outcome: Err(crate::device::ReadError::no_response(
+                "无响应，按任意键唤醒",
+            )),
         };
 
         assert!(probe_line(&missing).contains("未检测到接收器"));
@@ -471,7 +492,13 @@ mod tests {
 
     #[test]
     fn only_vendor_collections_land_in_the_first_section() {
-        let report = format_report(&sample(), "0.3.0", "2026-10-27 19:00:00", "Windows 10.0.26100 (x86_64)", None);
+        let report = format_report(
+            &sample(),
+            "0.3.0",
+            "2026-10-27 19:00:00",
+            "Windows 10.0.26100 (x86_64)",
+            None,
+        );
         let section = report
             .split("[2 已知厂商 ID 的其他接口]")
             .next()
@@ -482,14 +509,23 @@ mod tests {
         // The sibling collection on the same interface is listed too: seeing it is how a
         // dead collection gets identified.
         assert!(section.contains("用法 FF0B:0104"));
-        assert!(!section.contains("用法 0001:0006"), "boot protocol stays out");
+        assert!(
+            !section.contains("用法 0001:0006"),
+            "boot protocol stays out"
+        );
         assert!(!section.contains("046D"), "unrelated vendors stay out");
         assert!(section.contains("共 3 个"));
     }
 
     #[test]
     fn known_vendor_but_non_vendor_page_is_listed_separately() {
-        let report = format_report(&sample(), "0.3.0", "2026-10-27 19:00:00", "Windows 10.0.26100 (x86_64)", None);
+        let report = format_report(
+            &sample(),
+            "0.3.0",
+            "2026-10-27 19:00:00",
+            "Windows 10.0.26100 (x86_64)",
+            None,
+        );
         let section = report
             .split("[2 已知厂商 ID 的其他接口]")
             .nth(1)
@@ -501,7 +537,13 @@ mod tests {
 
     #[test]
     fn known_models_report_whether_their_interface_is_present() {
-        let report = format_report(&sample(), "0.3.0", "2026-10-27 19:00:00", "Windows 10.0.26100 (x86_64)", None);
+        let report = format_report(
+            &sample(),
+            "0.3.0",
+            "2026-10-27 19:00:00",
+            "Windows 10.0.26100 (x86_64)",
+            None,
+        );
 
         assert!(report.contains("A7 V2 Ultra+"));
         assert!(report.contains("V9 PRO"));
@@ -516,7 +558,13 @@ mod tests {
 
     #[test]
     fn report_states_that_nothing_was_sent_or_serialized() {
-        let report = format_report(&sample(), "0.3.0", "2026-10-27 19:00:00", "Windows 10.0.26100 (x86_64)", None);
+        let report = format_report(
+            &sample(),
+            "0.3.0",
+            "2026-10-27 19:00:00",
+            "Windows 10.0.26100 (x86_64)",
+            None,
+        );
 
         assert!(report.contains("未发送任何查询指令"));
         assert!(report.contains("序列号与设备路径未读取"));
@@ -525,7 +573,13 @@ mod tests {
 
     #[test]
     fn an_empty_machine_still_produces_a_readable_report() {
-        let report = format_report(&[], "0.3.0", "2026-10-27 19:00:00", "Windows 10.0.26100 (x86_64)", None);
+        let report = format_report(
+            &[],
+            "0.3.0",
+            "2026-10-27 19:00:00",
+            "Windows 10.0.26100 (x86_64)",
+            None,
+        );
 
         assert!(report.contains("HID 接口总数：0"));
         assert!(report.contains("（无）"));

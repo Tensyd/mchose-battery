@@ -20,7 +20,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-gnu
-          components: clippy
+          components: clippy, rustfmt
 
       - name: Install mingw binutils
         shell: pwsh
@@ -41,6 +41,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ env.CARGO_TARGET }}
+
+      - name: Formatting
+        run: cargo fmt --check
 
       - name: Test
         run: cargo test --target $env:CARGO_TARGET

@@ -91,9 +91,7 @@ fn stored_entry() -> Option<(&'static str, String)> {
 pub fn is_enabled() -> bool {
     match stored_entry() {
         Some((name, _)) if name == LEGACY_VALUE_NAME => true,
-        Some((_, stored)) => {
-            executable_of(&stored).eq_ignore_ascii_case(&current_executable())
-        }
+        Some((_, stored)) => executable_of(&stored).eq_ignore_ascii_case(&current_executable()),
         None => false,
     }
 }
@@ -213,7 +211,10 @@ fn decode(bytes: &[u8]) -> String {
 }
 
 fn wide(text: &str) -> Vec<u16> {
-    OsStr::new(text).encode_wide().chain(std::iter::once(0)).collect()
+    OsStr::new(text)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
 }
 
 #[cfg(test)]
@@ -308,7 +309,10 @@ mod tests {
     fn an_entry_pointing_at_a_deleted_file_is_repointed() {
         // Moving or deleting the exe must not silently kill autostart on the next boot.
         assert!(should_rewrite(
-            Some((VALUE_NAME, r#""C:\definitely-not-here\mc-battery.exe" --silent"#)),
+            Some((
+                VALUE_NAME,
+                r#""C:\definitely-not-here\mc-battery.exe" --silent"#
+            )),
             r#""C:\app\mc-battery.exe" --silent"#,
             r"C:\app\mc-battery.exe"
         ));
@@ -316,6 +320,10 @@ mod tests {
 
     #[test]
     fn no_entry_means_nothing_to_do() {
-        assert!(!should_rewrite(None, r#""C:\app\mc-battery.exe" --silent"#, r"C:\app\mc-battery.exe"));
+        assert!(!should_rewrite(
+            None,
+            r#""C:\app\mc-battery.exe" --silent"#,
+            r"C:\app\mc-battery.exe"
+        ));
     }
 }

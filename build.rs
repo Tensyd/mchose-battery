@@ -204,7 +204,11 @@ fn build_resource_section(images: &[IconImage]) -> (Vec<u8>, Vec<u32>) {
     for (index, name_dir) in name_dir_offsets.iter().enumerate() {
         debug_assert_eq!(blob.len() as u32, *name_dir);
         push_directory(&mut blob, 0, 1);
-        push_entry(&mut blob, LANGUAGE, data_entries + index as u32 * DATA_ENTRY_SIZE);
+        push_entry(
+            &mut blob,
+            LANGUAGE,
+            data_entries + index as u32 * DATA_ENTRY_SIZE,
+        );
     }
 
     debug_assert_eq!(blob.len() as u32, data_entries);
@@ -233,7 +237,9 @@ fn build_resource_section(images: &[IconImage]) -> (Vec<u8>, Vec<u32>) {
 /// DWORD boundary, so lengths are patched in once the children are known.
 fn version_info() -> Vec<u8> {
     let version = env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".to_string());
-    let mut parts = version.split('.').map(|part| part.parse::<u16>().unwrap_or(0));
+    let mut parts = version
+        .split('.')
+        .map(|part| part.parse::<u16>().unwrap_or(0));
     let major = parts.next().unwrap_or(0);
     let minor = parts.next().unwrap_or(0);
     let patch = parts.next().unwrap_or(0);
@@ -408,9 +414,8 @@ fn wrap_in_coff(section: &[u8], rva_fields: &[u32]) -> Vec<u8> {
     let relocations_offset = FILE_HEADER_SIZE + SECTION_HEADER_SIZE + raw_size;
     let symbols_offset = relocations_offset + RELOCATION_SIZE * rva_fields.len() as u32;
 
-    let mut object = Vec::with_capacity(
-        (symbols_offset + SYMBOL_SIZE + 4) as usize + section.len(),
-    );
+    let mut object =
+        Vec::with_capacity((symbols_offset + SYMBOL_SIZE + 4) as usize + section.len());
 
     object.extend_from_slice(&MACHINE_AMD64.to_le_bytes());
     object.extend_from_slice(&1_u16.to_le_bytes()); // number of sections

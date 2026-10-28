@@ -5,8 +5,8 @@
 //! and, separately, a pass on the target hardware in this program; an unverified model
 //! would only turn a working card into a wrong number.
 
-use crate::device::protocol::{A7_PROTOCOL, G87_PROTOCOL, Protocol, V9_PROTOCOL};
 use crate::device::DeviceKind;
+use crate::device::protocol::{A7_PROTOCOL, G87_PROTOCOL, Protocol, V9_PROTOCOL};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RetainPolicy {
@@ -163,6 +163,9 @@ mod tests {
     fn headset_never_carries_a_stale_value() {
         assert_eq!(spec_for(DeviceKind::Headset).retain, RetainPolicy::Never);
         assert_eq!(spec_for(DeviceKind::Mouse).retain, RetainPolicy::OnTimeout);
-        assert_eq!(spec_for(DeviceKind::Keyboard).retain, RetainPolicy::OnTimeout);
+        assert_eq!(
+            spec_for(DeviceKind::Keyboard).retain,
+            RetainPolicy::OnTimeout
+        );
     }
 }

@@ -22,11 +22,7 @@ fn main() {
 
     // `--diagnose` writes a passive interface report instead of starting the tray.
     if arguments.iter().any(|argument| argument == "--diagnose") {
-        diagnose::run(
-            arguments
-                .iter()
-                .any(|argument| argument == "--probe"),
-        );
+        diagnose::run(arguments.iter().any(|argument| argument == "--probe"));
         return;
     }
 

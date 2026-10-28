@@ -8,12 +8,12 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION,
-    NOTIFYICONDATAW, NOTIFYICON_VERSION_4, Shell_NotifyIconW,
+    NOTIFYICON_VERSION_4, NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, DestroyIcon, DestroyMenu, GetCursorPos,
     HICON, HMENU, ICONINFO, MF_GRAYED, MF_SEPARATOR, MF_STRING, PostMessageW, SetForegroundWindow,
-    TrackPopupMenu, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, WM_NULL,
+    TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RIGHTBUTTON, TrackPopupMenu, WM_NULL,
 };
 
 use crate::device::{Reading, Snapshot};
@@ -138,11 +138,7 @@ fn base_data(hwnd: HWND, icon: HICON) -> NOTIFYICONDATAW {
 
 fn copy_tip(data: &mut NOTIFYICONDATAW, text: &str) {
     let limit = data.szTip.len() - 1;
-    for (target, character) in data
-        .szTip
-        .iter_mut()
-        .zip(text.encode_utf16().take(limit))
-    {
+    for (target, character) in data.szTip.iter_mut().zip(text.encode_utf16().take(limit)) {
         *target = character;
     }
 }
@@ -204,11 +200,7 @@ pub fn create_app_icon() -> HICON {
             ReleaseDC(std::ptr::null_mut(), screen);
             return std::ptr::null_mut();
         }
-        std::ptr::copy_nonoverlapping(
-            APP_ICON.as_ptr(),
-            pixels as *mut u8,
-            APP_ICON.len(),
-        );
+        std::ptr::copy_nonoverlapping(APP_ICON.as_ptr(), pixels as *mut u8, APP_ICON.len());
 
         let stride = (APP_ICON_SIZE as usize).div_ceil(16) * 2;
         let mut mask_bits = vec![0_u8; stride * APP_ICON_SIZE as usize];
@@ -279,10 +271,7 @@ mod tests {
     #[test]
     fn tooltip_lists_all_devices() {
         let text = tooltip_text(&snapshot());
-        assert_eq!(
-            text,
-            "MC Battery  |  鼠标 85%  ·  键盘 68%  ·  耳机 --"
-        );
+        assert_eq!(text, "MC Battery  |  鼠标 85%  ·  键盘 68%  ·  耳机 --");
         assert!(text.encode_utf16().count() < 128);
     }
 
