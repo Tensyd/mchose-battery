@@ -1,20 +1,25 @@
-//! Embeds the shell icon into the executable.
+//! Embeds the shell icon and the version resource into the executable.
 //!
 //! The window class icon covers the window and the tray, but Explorer, the taskbar and
-//! Task Manager read the icon resource of the file itself. Rather than require a resource
-//! compiler (`windres`/`rc.exe`, neither of which is guaranteed on a build machine), this
-//! script writes the `.rsrc` COFF object itself: a resource directory holding the icon
-//! group and its images. The linker then only has to place one read-only section.
+//! Task Manager read the icon resource of the file itself. The version resource is what
+//! File > Properties shows, and what a bug report can be checked against.
+//!
+//! Rather than require a resource compiler (`windres`/`rc.exe`, neither of which is
+//! guaranteed on a build machine), this script writes the `.rsrc` COFF object itself: a
+//! resource directory holding the icon group, its images and the version block. The
+//! linker then only has to place one read-only section.
 //!
 //! A missing or unreadable `assets/app.ico` is not fatal; the binary simply keeps the
-//! generic icon.
+//! generic icon and still carries its version.
 
 use std::path::PathBuf;
 use std::{env, fs};
 
+const RT_VERSION: u32 = 16;
 const RT_ICON: u32 = 3;
 const RT_GROUP_ICON: u32 = 14;
-const LANGUAGE: u32 = 0x0409;
+const LANGUAGE: u32 = 0x0409; // en-US, what the strings below are written in
+const CODE_PAGE: u32 = 0x04B0; // Unicode BMP
 
 const DIRECTORY_SIZE: u32 = 16;
 const ENTRY_SIZE: u32 = 8;
@@ -22,6 +27,7 @@ const DATA_ENTRY_SIZE: u32 = 16;
 
 fn main() {
     println!("cargo:rerun-if-changed=assets/app.ico");
+    println!("cargo:rerun-if-changed=build.rs");
 
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
@@ -31,36 +37,34 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     let icon_path = manifest_dir.join("assets").join("app.ico");
 
-    let Ok(icon_bytes) = fs::read(&icon_path) else {
-        println!(
-            "cargo:warning={} is missing; using the generic executable icon",
-            icon_path.display()
-        );
-        return;
-    };
-
-    let images = match parse_ico(&icon_bytes) {
-        Ok(images) if !images.is_empty() => images,
-        Ok(_) => {
-            println!("cargo:warning=assets/app.ico has no images; using the generic icon");
-            return;
-        }
-        Err(error) => {
-            println!("cargo:warning=could not read assets/app.ico ({error}); using the generic icon");
-            return;
-        }
-    };
+    let images = fs::read(&icon_path)
+        .map_err(|error| error.to_string())
+        .and_then(|bytes| parse_ico(&bytes))
+        .unwrap_or_else(|error| {
+            println!(
+                "cargo:warning=could not read {} ({error}); the binary will keep the generic icon",
+                icon_path.display()
+            );
+            Vec::new()
+        });
 
     let (section, rva_fields) = build_resource_section(&images);
     let object_path = out_dir.join("app-icon.o");
 
     if let Err(error) = fs::write(&object_path, wrap_in_coff(&section, &rva_fields)) {
-        println!("cargo:warning=could not write the icon object ({error}); using the generic icon");
+        println!("cargo:warning=could not write the resource object ({error})");
         return;
     }
 
     // A single section, not a library, so it goes straight to the linker.
     println!("cargo:rustc-link-arg={}", object_path.display());
+}
+
+/// One leaf of the resource tree: a type, an id and its bytes.
+struct Resource {
+    type_id: u32,
+    name_id: u32,
+    data: Vec<u8>,
 }
 
 struct IconImage {
@@ -113,88 +117,213 @@ fn parse_ico(bytes: &[u8]) -> Result<Vec<IconImage>, String> {
 /// Lays out the resource directory tree and its payload.
 ///
 /// Directory offsets inside a `.rsrc` section are relative to the section start, but each
-/// data entry stores an image *RVA*, which is only known after linking. Those six fields
-/// are therefore reported back so the object can carry relocations for them.
+/// data entry stores an image *RVA*, which is only known after linking. Those fields are
+/// therefore reported back so the object can carry relocations for them.
 fn build_resource_section(images: &[IconImage]) -> (Vec<u8>, Vec<u32>) {
-    let icon_count = images.len() as u32;
-    let group = group_icon(images);
-
-    // Directory sizes, in the order they are written.
-    let icon_type_dir_size = DIRECTORY_SIZE + icon_count * ENTRY_SIZE;
-    let name_dir_size = DIRECTORY_SIZE + ENTRY_SIZE;
-    let group_type_dir_size = DIRECTORY_SIZE + ENTRY_SIZE;
-
-    let icon_type_dir = DIRECTORY_SIZE + 2 * ENTRY_SIZE;
-    let first_icon_name_dir = icon_type_dir + icon_type_dir_size;
-    let group_type_dir = first_icon_name_dir + icon_count * name_dir_size;
-    let group_name_dir = group_type_dir + group_type_dir_size;
-    let data_entries = group_name_dir + name_dir_size;
-    let payload_start = data_entries + DATA_ENTRY_SIZE * (icon_count + 1);
-
-    // Payload offsets, four-byte aligned as the loader expects.
-    let mut cursor = payload_start;
-    let mut icon_payloads = Vec::with_capacity(images.len());
-    for image in images {
-        let offset = align4(cursor);
-        icon_payloads.push(offset);
-        cursor = offset + image.data.len() as u32;
+    let mut resources: Vec<Resource> = Vec::new();
+    for (index, image) in images.iter().enumerate() {
+        resources.push(Resource {
+            type_id: RT_ICON,
+            name_id: index as u32 + 1,
+            data: image.data.clone(),
+        });
     }
-    let group_payload = align4(cursor);
+    if !images.is_empty() {
+        resources.push(Resource {
+            type_id: RT_GROUP_ICON,
+            name_id: 1,
+            data: group_icon(images),
+        });
+    }
+    resources.push(Resource {
+        type_id: RT_VERSION,
+        name_id: 1,
+        data: version_info(),
+    });
+
+    // Types in first-seen order, each holding the ids that belong to it.
+    let mut groups: Vec<(u32, Vec<usize>)> = Vec::new();
+    for (index, resource) in resources.iter().enumerate() {
+        match groups.iter_mut().find(|(id, _)| *id == resource.type_id) {
+            Some((_, members)) => members.push(index),
+            None => groups.push((resource.type_id, vec![index])),
+        }
+    }
+
+    // Layout, in write order: root directory, one directory per type, one directory per
+    // leaf (the language level), the data entries, then the payloads.
+    let mut offset = DIRECTORY_SIZE + ENTRY_SIZE * groups.len() as u32;
+
+    let mut type_dir_offsets = Vec::with_capacity(groups.len());
+    for (_, members) in &groups {
+        type_dir_offsets.push(offset);
+        offset += DIRECTORY_SIZE + ENTRY_SIZE * members.len() as u32;
+    }
+
+    let mut name_dir_offsets = Vec::with_capacity(resources.len());
+    for _ in &resources {
+        name_dir_offsets.push(offset);
+        offset += DIRECTORY_SIZE + ENTRY_SIZE; // exactly one language
+    }
+
+    let data_entries = offset;
+    let payload_start = data_entries + DATA_ENTRY_SIZE * resources.len() as u32;
+
+    let mut cursor = payload_start;
+    let mut payload_offsets = Vec::with_capacity(resources.len());
+    for resource in &resources {
+        let aligned = align4(cursor);
+        payload_offsets.push(aligned);
+        cursor = aligned + resource.data.len() as u32;
+    }
 
     let mut blob = Vec::new();
 
-    // Root: the two resource types.
-    push_directory(&mut blob, 0, 2);
-    push_entry(&mut blob, RT_ICON, icon_type_dir | 0x8000_0000);
-    push_entry(&mut blob, RT_GROUP_ICON, group_type_dir | 0x8000_0000);
-
-    // RT_ICON: one named entry per image.
-    push_directory(&mut blob, 0, icon_count as u16);
-    for id in 0..icon_count {
-        let name_dir = first_icon_name_dir + id * name_dir_size;
-        push_entry(&mut blob, id + 1, name_dir | 0x8000_0000);
+    // Root directory: one entry per resource type.
+    push_directory(&mut blob, 0, groups.len() as u16);
+    for ((type_id, _), type_dir) in groups.iter().zip(type_dir_offsets.iter()) {
+        push_entry(&mut blob, *type_id, type_dir | 0x8000_0000);
     }
 
-    // Each image has a single language directory pointing at its data entry.
-    for index in 0..icon_count {
+    // Each type directory, followed by the language directories of its leaves.
+    for ((_, members), type_dir) in groups.iter().zip(type_dir_offsets.iter()) {
+        debug_assert_eq!(blob.len() as u32, *type_dir);
+        push_directory(&mut blob, 0, members.len() as u16);
+        for member in members {
+            push_entry(
+                &mut blob,
+                resources[*member].name_id,
+                name_dir_offsets[*member] | 0x8000_0000,
+            );
+        }
+    }
+
+    for (index, name_dir) in name_dir_offsets.iter().enumerate() {
+        debug_assert_eq!(blob.len() as u32, *name_dir);
         push_directory(&mut blob, 0, 1);
-        push_entry(
-            &mut blob,
-            LANGUAGE,
-            data_entries + index * DATA_ENTRY_SIZE,
-        );
+        push_entry(&mut blob, LANGUAGE, data_entries + index as u32 * DATA_ENTRY_SIZE);
     }
-
-    // RT_GROUP_ICON: one named entry.
-    push_directory(&mut blob, 0, 1);
-    push_entry(&mut blob, 1, group_name_dir | 0x8000_0000);
-    push_directory(&mut blob, 0, 1);
-    push_entry(
-        &mut blob,
-        LANGUAGE,
-        data_entries + icon_count * DATA_ENTRY_SIZE,
-    );
 
     debug_assert_eq!(blob.len() as u32, data_entries);
 
-    let mut rva_fields = Vec::with_capacity(images.len() + 1);
-    for (image, offset) in images.iter().zip(icon_payloads.iter()) {
+    let mut rva_fields = Vec::with_capacity(resources.len());
+    for (resource, payload) in resources.iter().zip(payload_offsets.iter()) {
         rva_fields.push(blob.len() as u32);
-        push_data_entry(&mut blob, *offset, image.data.len() as u32);
+        push_data_entry(&mut blob, *payload, resource.data.len() as u32);
     }
-    rva_fields.push(blob.len() as u32);
-    push_data_entry(&mut blob, group_payload, group.len() as u32);
 
     debug_assert_eq!(blob.len() as u32, payload_start);
 
-    for (image, offset) in images.iter().zip(icon_payloads.iter()) {
-        pad_to(&mut blob, *offset);
-        blob.extend_from_slice(&image.data);
+    for (resource, payload) in resources.iter().zip(payload_offsets.iter()) {
+        pad_to(&mut blob, *payload);
+        blob.extend_from_slice(&resource.data);
     }
-    pad_to(&mut blob, group_payload);
-    blob.extend_from_slice(&group);
 
     (blob, rva_fields)
+}
+
+/// RT_VERSION payload: the strings File > Properties shows.
+///
+/// Layout is the documented VS_VERSIONINFO tree: a fixed 52-byte block, then
+/// StringFileInfo (one table of key/value pairs) and VarFileInfo (the language/code-page
+/// pair the table is keyed by). Every block carries its own byte length and is padded to a
+/// DWORD boundary, so lengths are patched in once the children are known.
+fn version_info() -> Vec<u8> {
+    let version = env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".to_string());
+    let mut parts = version.split('.').map(|part| part.parse::<u16>().unwrap_or(0));
+    let major = parts.next().unwrap_or(0);
+    let minor = parts.next().unwrap_or(0);
+    let patch = parts.next().unwrap_or(0);
+    let build = parts.next().unwrap_or(0);
+    let version_text = format!("{major}.{minor}.{patch}.{build}");
+
+    let fixed = {
+        let mut value = Vec::with_capacity(52);
+        value.extend_from_slice(&0xFEEF_04BD_u32.to_le_bytes()); // signature
+        value.extend_from_slice(&0x0001_0000_u32.to_le_bytes()); // struct version
+        value.extend_from_slice(&(u32::from(major) << 16 | u32::from(minor)).to_le_bytes());
+        value.extend_from_slice(&(u32::from(patch) << 16 | u32::from(build)).to_le_bytes());
+        value.extend_from_slice(&(u32::from(major) << 16 | u32::from(minor)).to_le_bytes());
+        value.extend_from_slice(&(u32::from(patch) << 16 | u32::from(build)).to_le_bytes());
+        value.extend_from_slice(&0x3F_u32.to_le_bytes()); // flags mask
+        value.extend_from_slice(&0_u32.to_le_bytes()); // flags: no debug/prerelease
+        value.extend_from_slice(&0x0004_0004_u32.to_le_bytes()); // VOS_NT_WINDOWS32
+        value.extend_from_slice(&0x0000_0001_u32.to_le_bytes()); // VFT_APP
+        value.extend_from_slice(&0_u32.to_le_bytes()); // subtype
+        value.extend_from_slice(&0_u32.to_le_bytes()); // date MS
+        value.extend_from_slice(&0_u32.to_le_bytes()); // date LS
+        value
+    };
+    debug_assert_eq!(fixed.len(), 52);
+
+    let strings = [
+        ("CompanyName", "Tensyd".to_string()),
+        ("FileDescription", "MC Battery 无线外设电量".to_string()),
+        ("FileVersion", version_text.clone()),
+        ("InternalName", "mc-battery".to_string()),
+        ("LegalCopyright", "MIT License".to_string()),
+        ("OriginalFilename", "MC-Battery.exe".to_string()),
+        ("ProductName", "MC Battery".to_string()),
+        ("ProductVersion", version_text),
+    ];
+
+    let mut table_children = Vec::new();
+    for (key, value) in &strings {
+        let words = value.encode_utf16().count() as u16 + 1; // plus the terminator
+        table_children.extend(block(key, &wide_bytes(value), words, 1, &[]));
+    }
+
+    let table = block(
+        &format!("{LANGUAGE:04X}{CODE_PAGE:04X}"),
+        &[],
+        0,
+        1,
+        &table_children,
+    );
+    let string_file_info = block("StringFileInfo", &[], 0, 1, &table);
+
+    let translation = ((LANGUAGE << 16) | CODE_PAGE).to_le_bytes();
+    let var = block("Translation", &translation, 4, 0, &[]);
+    let var_file_info = block("VarFileInfo", &[], 0, 1, &var);
+
+    let mut children = string_file_info;
+    children.extend_from_slice(&var_file_info);
+
+    block("VS_VERSION_INFO", &fixed, 52, 0, &children)
+}
+
+/// One VS_VERSIONINFO block: length, value length, type, key, value, children.
+fn block(key: &str, value: &[u8], value_length: u16, kind: u16, children: &[u8]) -> Vec<u8> {
+    let mut blob = Vec::new();
+    blob.extend_from_slice(&0_u16.to_le_bytes()); // wLength, patched below
+    blob.extend_from_slice(&value_length.to_le_bytes());
+    blob.extend_from_slice(&kind.to_le_bytes());
+    blob.extend_from_slice(&wide_bytes(key));
+    pad4(&mut blob);
+    if !value.is_empty() {
+        blob.extend_from_slice(value);
+        pad4(&mut blob);
+    }
+    blob.extend_from_slice(children);
+
+    let length = blob.len() as u16;
+    blob[0..2].copy_from_slice(&length.to_le_bytes());
+    blob
+}
+
+fn wide_bytes(text: &str) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(text.len() * 2 + 2);
+    for unit in text.encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    bytes.extend_from_slice(&0_u16.to_le_bytes());
+    bytes
+}
+
+fn pad4(blob: &mut Vec<u8>) {
+    while !blob.len().is_multiple_of(4) {
+        blob.push(0);
+    }
 }
 
 fn read_u32(bytes: &[u8], at: usize) -> u32 {

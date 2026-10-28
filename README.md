@@ -109,7 +109,7 @@ cd mchose-battery
 cargo build --release
 ```
 
-产物位于 `target/release/mc-battery.exe`。`build.rs` 会自动将 `assets/app.ico` 编译为内部资源段链接至二进制中，无需额外安装资源编译器。
+产物位于 `target/release/mc-battery.exe`。`build.rs` 会自行生成 `.rsrc` 资源段，把 `assets/app.ico` 与版本信息（取自 `Cargo.toml`）一起链接进二进制，无需安装 `windres` 或 `rc.exe`。
 
 ---
 
