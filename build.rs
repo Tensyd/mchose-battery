@@ -28,6 +28,9 @@ const DATA_ENTRY_SIZE: u32 = 16;
 fn main() {
     println!("cargo:rerun-if-changed=assets/app.ico");
     println!("cargo:rerun-if-changed=build.rs");
+    // The embedded version string comes from CARGO_PKG_VERSION, so a version bump has to
+    // re-run this script. Without this line the binary would quietly keep the old number.
+    println!("cargo:rerun-if-changed=Cargo.toml");
 
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;

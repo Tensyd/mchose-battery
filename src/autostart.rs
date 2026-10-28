@@ -126,7 +126,19 @@ fn should_rewrite(entry: Option<(&str, &str)>, expected: &str, current_executabl
     if name == LEGACY_VALUE_NAME {
         return true;
     }
-    stored != expected && executable_of(stored).eq_ignore_ascii_case(current_executable)
+    if stored == expected {
+        return false;
+    }
+
+    // An entry pointing at a file that is gone can only fail at boot. Repoint it at this
+    // executable rather than leaving the machine with a silently dead autostart.
+    let target = executable_of(stored);
+    if !std::path::Path::new(&target).is_file() {
+        return true;
+    }
+
+    // A different, existing path is somebody's second copy: do not hijack it.
+    target.eq_ignore_ascii_case(current_executable)
 }
 
 fn current_executable() -> String {
@@ -283,10 +295,20 @@ mod tests {
     }
 
     #[test]
-    fn another_installation_is_not_hijacked() {
-        // Same value name, different path: a second copy someone keeps on purpose.
+    fn another_live_installation_is_not_hijacked() {
+        // Same value name, different path that actually exists: somebody's second copy.
         assert!(!should_rewrite(
-            Some((VALUE_NAME, r#""D:\other\mc-battery.exe""#)),
+            Some((VALUE_NAME, r#""C:\Windows\notepad.exe" --silent"#)),
+            r#""C:\app\mc-battery.exe" --silent"#,
+            r"C:\app\mc-battery.exe"
+        ));
+    }
+
+    #[test]
+    fn an_entry_pointing_at_a_deleted_file_is_repointed() {
+        // Moving or deleting the exe must not silently kill autostart on the next boot.
+        assert!(should_rewrite(
+            Some((VALUE_NAME, r#""C:\definitely-not-here\mc-battery.exe" --silent"#)),
             r#""C:\app\mc-battery.exe" --silent"#,
             r"C:\app\mc-battery.exe"
         ));
